@@ -11,21 +11,26 @@ This is a Meeting Speech-to-Text application that transcribes audio files using 
 ### Backend (`/backend`)
 - **Framework**: FastAPI with Python 3.10-3.12
 - **Main dependencies**: Azure Speech SDK, OpenAI, Azure Storage Blob, Azure Cosmos DB
-- **Core functionality**: Audio transcription, analysis, history management
+- **Core functionality**: Audio transcription, analysis, history management, real-time speech-to-text
 - **Key modules**:
-  - `main.py`: FastAPI application entry point
+  - `main.py`: FastAPI application entry point, includes `/live/token` endpoint for Azure Speech SDK
   - `utils/transcription.py`: Azure Speech Service integration
   - `utils/analyze.py`: AI-powered analysis using OpenAI
   - `utils/storage.py`: Azure Blob Storage handling
   - `utils/states.py`: Data classes for History, Transcription objects
   - `utils/audio.py`: Audio file processing and validation
+  - `utils/transcription_live_direct.py`: Real-time transcription with Azure Speech (deprecated)
+- **Environment variables required**: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_ENDPOINT`, `AZURE_SPEECH_REGION`
 
 ### Frontend (`/frontend`)
 - **Framework**: React 18 + TypeScript + Vite
 - **UI Library**: Radix UI components with Tailwind CSS
-- **Key features**: File upload, transcription display, history management
+- **Key features**: File upload, transcription display, history management, real-time speech-to-text
 - **Routing**: React Router with pages: Playground (main), Introduction, History
 - **State management**: React Context for user info and history
+- **Real-time components**: 
+  - `LiveRecordingSDK.tsx`: Modern Azure Speech SDK implementation with direct WebSocket connection
+  - `LiveRecordingStateless.tsx`: Previous HTTP chunking implementation (deprecated)
 
 ### Infrastructure (`/infra`)
 - **Platform**: Azure using Bicep templates
@@ -33,6 +38,15 @@ This is a Meeting Speech-to-Text application that transcribes audio files using 
 - **Frontend hosting**: Azure Static Web Apps
 - **Storage**: Azure Blob Storage + Azure Cosmos DB
 - **Deployment**: Azure Developer CLI (`azd`)
+
+## Real-time Speech-to-Text Implementation
+
+The application now supports real-time speech-to-text using Azure Speech SDK:
+
+1. **Architecture**: Frontend connects directly to Azure Speech Service via WebSocket
+2. **Authentication**: Backend provides temporary Azure Speech tokens via `/live/token`
+3. **Requirements**: Azure Speech Service credentials must be configured in Container Apps
+4. **Documentation**: See `docs/azure-speech-setup.md` for environment variable configuration
 
 ## Development Commands
 

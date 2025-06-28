@@ -57,7 +57,7 @@ import {
 import axios from 'axios';
 import { Footer } from "@/components/Footer";
 import { MarkdownRenderer } from "@/components/markdown-display";
-import { LiveRecordingStateless } from "@/components/LiveRecordingStateless";
+import { LiveRecordingSDKDiarization } from "@/components/LiveRecordingSDKDiarization";
 
 // import AnalysisResultDisplay from "@/components/AnalysisResultDisplay";
 
@@ -696,7 +696,7 @@ export default function App() {
 
               {/* Live Recording */}
               <div className="md:col-span-2">
-                <LiveRecordingStateless 
+                <LiveRecordingSDKDiarization 
                   onTranscriptionUpdate={(results) => {
                     // Handle live transcription updates
                     console.log('Live transcription update:', results);

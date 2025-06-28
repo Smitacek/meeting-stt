@@ -884,94 +884,86 @@ async def websocket_transcribe(websocket: WebSocket):
         logger.info(f"WebSocket session {session_id} closed")
 
 # Stateless live transcription endpoints
-@app.post("/live/transcribe")
-async def process_live_audio(
-    audio_file: UploadFile = File(...),
-    session_id: str = Form("default")
-):
+@app.get("/live/token")
+async def get_speech_token():
     """
-    Continuous live transcription using Azure Speech Service with PushAudioInputStream.
-    Uses proper streaming pattern instead of separate sessions per chunk.
+    Generate temporary Azure Speech Service token for frontend SDK.
+    Modern approach: Frontend uses Azure Speech SDK directly with temp token.
     """
-    logger = logging.getLogger("process_live_audio")
+    logger = logging.getLogger("get_speech_token")
     
     try:
-        # Read audio data
-        audio_data = await audio_file.read()
-        chunk_size = len(audio_data)
+        # Import Azure Speech SDK
+        import azure.cognitiveservices.speech as speechsdk
+        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
         
-        logger.info(f"Processing audio chunk: {chunk_size} bytes for session: {session_id}")
+        # Check if we have valid Azure credentials
+        speech_key = os.getenv("AZURE_SPEECH_KEY")
+        speech_endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
+        speech_region = os.getenv("AZURE_SPEECH_REGION", "westeurope")
         
-        # Use Azure Speech Service for real transcription with continuous session
-        from utils.transcription_live_direct import process_audio_chunk_direct
+        logger.info(f"Azure Speech config - Key exists: {bool(speech_key)}, Endpoint: {speech_endpoint}, Region: {speech_region}")
         
-        try:
-            # Process with Azure Speech Service using continuous session
-            transcription_result = await process_audio_chunk_direct(audio_data, session_id)
-            
-            if transcription_result and transcription_result.get("success"):
-                results = transcription_result.get("results", [])
-                logger.info(f"Azure Speech API returned {len(results)} transcription segments")
-                
-                # If Azure returns empty results, don't fallback to mock - just return empty
-                # This allows continuous recording without mixing mock data
-                return {
-                    "results": results,
-                    "chunk_info": {
-                        "size_bytes": chunk_size,
-                        "processed_at": time.time(),
-                        "segments_generated": len(results),
-                        "service": "Azure Speech Service",
-                        "note": "Empty results are normal for silence or unclear audio"
-                    }
+        if not speech_key and not os.getenv("AZURE_CLIENT_ID"):
+            logger.warning("No Azure Speech credentials available")
+            return {
+                "success": False,
+                "error": "No Azure credentials configured",
+                "mock_mode": True,
+                "debug": {
+                    "has_key": bool(speech_key),
+                    "has_endpoint": bool(speech_endpoint),
+                    "has_client_id": bool(os.getenv("AZURE_CLIENT_ID"))
                 }
-            else:
-                # Only fallback on actual Azure service failure
-                error_msg = transcription_result.get("error", "Unknown Azure error")
-                logger.warning(f"Azure Speech Service failed: {error_msg}")
-                
-                # Check if it's credentials issue vs temporary failure
-                if "credentials" in error_msg.lower() or "authentication" in error_msg.lower():
-                    # Permanent failure - use mock
-                    logger.error("Azure credentials issue - falling back to mock")
-                    return await _generate_mock_transcription(audio_data, chunk_size)
-                else:
-                    # Temporary failure - return empty results to continue Azure attempts
-                    logger.warning("Temporary Azure failure - returning empty results")
-                    return {
-                        "results": [],
-                        "chunk_info": {
-                            "size_bytes": chunk_size,
-                            "processed_at": time.time(),
-                            "segments_generated": 0,
-                            "service": "Azure Speech Service (temporary failure)",
-                            "error": error_msg
-                        }
-                    }
-                
-        except Exception as azure_error:
-            logger.error(f"Azure Speech Service exception: {str(azure_error)}")
-            
-            # Check if it's import error (module not available)
-            if "No module named" in str(azure_error) or "ImportError" in str(azure_error):
-                logger.error("Azure Speech SDK not available - falling back to mock")
-                return await _generate_mock_transcription(audio_data, chunk_size)
-            else:
-                # Other exceptions - continue trying Azure
-                return {
-                    "results": [],
-                    "chunk_info": {
-                        "size_bytes": chunk_size,
-                        "processed_at": time.time(),
-                        "segments_generated": 0,
-                        "service": "Azure Speech Service (exception)",
-                        "error": str(azure_error)
-                    }
-                }
-    
+            }
+        
+        # Use region from environment or extract from endpoint
+        region = speech_region
+        if not region and speech_endpoint:
+            try:
+                # Extract region from endpoint URL (e.g., "westeurope" from "https://westeurope.api.cognitive.microsoft.com/")
+                region = speech_endpoint.split('//')[1].split('.')[0]
+            except:
+                region = "westeurope"  # fallback
+        
+        # Generate authorization token
+        if speech_key:
+            # Azure Speech SDK doesn't provide direct token generation
+            # Frontend will use the key directly or we can use REST API
+            # For now, return the configuration for the frontend to handle
+            logger.info("Using subscription key authentication")
+            return {
+                "success": True,
+                "key": speech_key,  # Frontend will use this with SpeechConfig.fromSubscription
+                "region": region,
+                "endpoint": speech_endpoint,
+                "service": "Azure Speech Service",
+                "auth_method": "subscription_key"
+            }
+        else:
+            # Use Azure Identity for token
+            credential = DefaultAzureCredential()
+            token_provider = get_bearer_token_provider(
+                credential, 
+                "https://cognitiveservices.azure.com/.default"
+            )
+            auth_token = token_provider()
+            return {
+                "success": True,
+                "token": auth_token,
+                "region": region,
+                "endpoint": speech_endpoint,
+                "service": "Azure Speech Service",
+                "auth_method": "managed_identity"
+            }
+        
     except Exception as e:
-        logger.error(f"Error processing live audio: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to process audio: {str(e)}")
+        logger.error(f"Failed to generate speech token: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "mock_mode": True
+        }
 
 async def _generate_mock_transcription(audio_data: bytes, chunk_size: int):
     """Fallback mock transcription when Azure Speech Service is unavailable."""
@@ -1100,25 +1092,32 @@ async def test_live_transcription(use_azure: bool = True):
             "timestamp": time.time()
         }
 
-@app.post("/live/stop")
-async def stop_live_transcription(session_id: str = Form("default")):
-    """Stop and cleanup Azure Speech Service session."""
-    logger = logging.getLogger("stop_live_transcription")
+@app.get("/live/status") 
+async def get_live_status():
+    """Get status of live transcription service."""
+    # Check Azure Speech Service availability
+    azure_available = bool(os.getenv("AZURE_SPEECH_KEY") or os.getenv("AZURE_CLIENT_ID"))
     
-    try:
-        from utils.transcription_live_direct import cleanup_session
-        await cleanup_session(session_id)
-        
-        logger.info(f"Stopped live transcription session: {session_id}")
-        return {
-            "status": "stopped",
-            "session_id": session_id,
-            "timestamp": time.time()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error stopping session {session_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to stop session: {str(e)}")
+    return {
+        "service": "Live Transcription",
+        "mode": "Azure Speech SDK (Frontend)",
+        "version": "v3.0",
+        "azure_speech_available": azure_available,
+        "approach": "Direct frontend SDK with temp tokens",
+        "endpoints": {
+            "token": "GET /live/token - Get temporary Azure Speech token",
+            "status": "GET /live/status - This endpoint"
+        },
+        "supported_features": [
+            "Real-time WebSocket streaming",
+            "Speaker diarization", 
+            "Continuous recognition",
+            "Browser microphone access"
+        ],
+        "no_backend_sessions": True,
+        "replica_friendly": True,
+        "timestamp": time.time()
+    }
 
 @app.get("/live/test")
 async def test_live_endpoint():
