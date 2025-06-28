@@ -16,6 +16,7 @@ interface TranscriptionResult {
 }
 
 interface LiveRecordingSDKProps {
+  onTranscriptionStart?: () => void;
   onTranscriptionUpdate?: (results: TranscriptionResult[]) => void;
   onSessionEnd?: (fullTranscription: TranscriptionResult[]) => void;
 }
@@ -23,6 +24,7 @@ interface LiveRecordingSDKProps {
 const BASE_URL = import.meta.env.VITE_BASE_URL || 'http://localhost:8000';
 
 export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
+  onTranscriptionStart,
   onTranscriptionUpdate,
   onSessionEnd
 }) => {
@@ -208,6 +210,11 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
           setIsRecording(true);
           setIsConnecting(false);
           setConnectionStatus('connected');
+          
+          // Notify parent about transcription start
+          if (onTranscriptionStart) {
+            onTranscriptionStart();
+          }
         },
         (err) => {
           console.error('Failed to start transcription:', err);

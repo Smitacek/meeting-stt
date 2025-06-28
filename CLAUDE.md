@@ -29,8 +29,12 @@ This is a Meeting Speech-to-Text application that transcribes audio files using 
 - **Routing**: React Router with pages: Playground (main), Introduction, History
 - **State management**: React Context for user info and history
 - **Real-time components**: 
-  - `LiveRecordingSDK.tsx`: Modern Azure Speech SDK implementation with direct WebSocket connection
+  - `LiveRecordingSDKDiarization.tsx`: Modern Azure Speech SDK with speaker diarization
+  - `LiveRecordingSDK.tsx`: Basic Azure Speech SDK implementation
   - `LiveRecordingStateless.tsx`: Previous HTTP chunking implementation (deprecated)
+- **Unified UI**: Optimized workflow with mode switcher and merged steps:
+  - **Record mode**: Step 1 (Choose method) → Step 2 (Upload & Transcribe) → Step 3 (Results) → Step 4 (Analysis)  
+  - **Live mode**: Step 1 (Choose method) → Step 2 (Live Recording) → Step 3 (Results) → Step 4 (Analysis)
 
 ### Infrastructure (`/infra`)
 - **Platform**: Azure using Bicep templates

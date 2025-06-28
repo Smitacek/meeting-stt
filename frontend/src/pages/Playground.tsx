@@ -80,6 +80,29 @@ export default function App() {
 
   // Upload step mode: 'local' or 'blob'
   const [uploadMode, setUploadMode] = useState<'local' | 'blob'>('local');
+  // Transcription mode: 'record' or 'live'
+  const [transcriptionMode, setTranscriptionMode] = useState<'record' | 'live'>('record');
+  // Live session timing
+  const [liveSessionStartTime, setLiveSessionStartTime] = useState<number | null>(null);
+  
+  // Reset state when transcription mode changes
+  const handleTranscriptionModeChange = (mode: 'record' | 'live') => {
+    setTranscriptionMode(mode);
+    // Reset all relevant state
+    setIsProcessed(false);
+    setIsProcessing(false);
+    setAllResults([]);
+    setGroupedResults({});
+    setTranscriptionResult(null);
+    setAnalysisText('');
+    setAnalysisResult(null);
+    setUploadedFiles([]);
+    setIsUploaded(false);
+    setSelectedFiles([]);
+    setSelectedBlobFiles([]);
+    setLiveSessionStartTime(null);
+    console.log(`Switched to ${mode} mode`);
+  };
   // Local file upload state
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   // Blob storage state
@@ -598,10 +621,38 @@ export default function App() {
             {/* if session is running display loader */}
             <div className="min-h-[100vh] flex-1 rounded-xl bg-muted/50 md:min-h-min">
               
-              {/* Upload files */}
+              {/* Transcription Mode Selection */}
               <Card className="md:col-span-2 flex flex-col">
                 <CardHeader className="py-2">
-                  <h2 className="text-lg font-semibold mb-4">Step 1. Upload a recording</h2>
+                  <h2 className="text-lg font-semibold mb-4">Step 1. Choose transcription method</h2>
+                </CardHeader>
+                <CardContent className="pb-4">
+                  <div className="flex gap-4 items-center mb-4">
+                    <Label className="mr-2">Method:</Label>
+                    <Select value={transcriptionMode} onValueChange={(val) => handleTranscriptionModeChange(val as 'record' | 'live')}>
+                      <SelectTrigger className="w-60">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="record">📁 Record & Transcribe (Upload files)</SelectItem>
+                        <SelectItem value="live">🎤 Live Transcription (Real-time)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {transcriptionMode === 'record' 
+                      ? 'Upload existing audio files and process them with AI transcription'
+                      : 'Real-time speech-to-text from your microphone with speaker diarization'
+                    }
+                  </p>
+                </CardContent>
+              </Card>
+
+              {/* Upload files - only for record mode */}
+              {transcriptionMode === 'record' && (
+              <Card className="md:col-span-2 flex flex-col">
+                <CardHeader className="py-2">
+                  <h2 className="text-lg font-semibold mb-4">Step 2. Upload and transcribe recording</h2>
                 </CardHeader>
                 {!false && (
                 <CardContent className="flex-1 h-96">
@@ -677,160 +728,156 @@ export default function App() {
                       </Button>
                     </div>
                   )}
+
+                  {/* Transcription settings - only show when files are uploaded */}
+                  {isUploaded && (
+                    <div className="px-6 pb-4">
+                      <Separator className="mb-4" />
+                      <h3 className="text-md font-semibold mb-4">Transcription Settings</h3>
+                      
+                      {/* Uploaded file info */}
+                      {uploadedFiles.length > 0 && (
+                        <div className="mb-6">
+                          <div className="text-xs text-muted-foreground mb-2 font-semibold">Uploaded file details:</div>
+                          <div className="space-y-2">
+                            {uploadedFiles.map((file, idx) => (
+                              <div
+                                key={file.filename + idx}
+                                className="rounded bg-muted/40 p-3 border border-muted-foreground/10 flex flex-col items-center"
+                              >
+                                <div className="flex items-center gap-4 w-full justify-center">
+                                  <AudioLines className="h-8 w-8 text-blue-500" />
+                                  <div className="font-mono text-sm text-foreground break-all">{file.filename_original}
+                                    <Separator className="my-1"/>
+                                    <div className="flex flex-wrap gap-4 mt-2 text-xs text-muted-foreground justify-center">
+                                      <div>Channels: <span className="font-semibold text-foreground">{file.inspect.channels}</span></div>
+                                      <div>Bits/Sample: <span className="font-semibold text-foreground">{file.inspect.bits_per_sample}</span></div>
+                                      <div>Sample/Frame Rate: <span className="font-semibold text-foreground">{file.inspect.samples_per_second || file.inspect.frame_rate} Hz</span></div>
+                                  </div>
+                                  </div>
+                                  {selectedFiles[idx] && (
+                                    <audio
+                                      controls
+                                      src={URL.createObjectURL(selectedFiles[idx])}
+                                      className="h-8"
+                                      style={{ minWidth: 120 }}
+                                    />
+                                  )}
+                                </div>
+                               
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <form className="space-y-6" onSubmit={handleTranscriptionSubmit}>
+                        {/* Model selection */}
+                        <div>
+                          <Label htmlFor="model" className="mb-2 block">Model selection:</Label>
+                          <Select value={model} onValueChange={setModel}>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Select model" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="llm">LLM</SelectItem>
+                              <SelectItem value="whisper">Whisper</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        
+                        {/* Submit button */}
+                        <div>
+                          <Button type="submit" variant="default" disabled={isProcessing} className="w-full">
+                            {isProcessing ? <Loader2 className="ml-2 h-4 w-4 animate-spin" /> : <AudioLines className="mr-1 inline h-4 w-4" />}
+                            {isProcessing ? 'Processing...' : 'Start Transcription'}
+                          </Button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
                 </CardContent>
                 )}
-                {isUploaded && (
+                {isProcessed && transcriptionMode === 'record' && (
                 <CardFooter className="flex flex-col space-y-2">
                   <Check className="h-6 w-6 text-green-500" />
+                  <span className="text-sm text-muted-foreground">Transcription completed successfully!</span>
                 </CardFooter>
                 )}
               </Card>
+              )}
+
+              {/* Live Recording - only for live mode */}
+              {transcriptionMode === 'live' && (
+              <Card className="md:col-span-2 flex flex-col">
+                <CardHeader className="py-2">
+                  <h2 className="text-lg font-semibold mb-4">Step 2. Live Recording</h2>
+                </CardHeader>
+                <CardContent>
+                  <LiveRecordingSDKDiarization 
+                    onTranscriptionStart={() => {
+                      // Track session start time
+                      setLiveSessionStartTime(Date.now());
+                      console.log('Live session started');
+                    }}
+                    onTranscriptionUpdate={(results) => {
+                      // Handle live transcription updates - convert to same format as batch
+                      console.log('Live transcription update:', results);
+                      
+                      // Convert live results to same format as batch processing
+                      const convertedResults = results.map(result => ({
+                        filename: 'Live Session',
+                        originalPath: 'live://session',
+                        status: 'transcribed',
+                        session: sessionID,
+                        text: result.text, // Keep consistent with batch format
+                        speaker_id: result.speaker,
+                        offset: result.offset * 10000000, // Convert back to Azure format for consistency
+                        duration: result.duration * 10000000,
+                        timestamp: result.timestamp,
+                        event_type: 'transcribed', // Add for consistency
+                        confidence: result.confidence
+                      }));
+                      
+                      // Add to allResults for unified processing
+                      setAllResults(prev => [...prev, ...convertedResults]);
+                      
+                      // Update grouped results
+                      setGroupedResults(prev => ({
+                        ...prev,
+                        'Live Session': [...(prev['Live Session'] || []), ...convertedResults]
+                      }));
+                    }}
+                    onSessionEnd={(fullTranscription) => {
+                      // Handle session end - same as batch processing
+                      console.log('Live session ended, full transcription:', fullTranscription);
+                      setIsProcessed(true);
+                      
+                      // Measure session time using actual start time
+                      if (liveSessionStartTime) {
+                        const elapsedTime = Date.now() - liveSessionStartTime;
+                        const minutes = Math.floor(elapsedTime / 60000);
+                        const seconds = Math.floor((elapsedTime % 60000) / 1000);
+                        setSessionTime(`${minutes}:${seconds < 10 ? '0' : ''}${seconds}`);
+                      }
+                    }}
+                  />
+                </CardContent>
+              </Card>
+              )}
+
               <Separator className='my-2 invisible'/>
 
-              {/* OR Live Recording */}
-              <div className="md:col-span-2 flex items-center gap-4 my-4">
-                <div className="flex-1 h-px bg-border" />
-                <span className="text-sm text-muted-foreground font-medium">NEBO</span>
-                <div className="flex-1 h-px bg-border" />
-              </div>
-
-              {/* Live Recording */}
-              <div className="md:col-span-2">
-                <LiveRecordingSDKDiarization 
-                  onTranscriptionUpdate={(results) => {
-                    // Handle live transcription updates
-                    console.log('Live transcription update:', results);
-                  }}
-                  onSessionEnd={(fullTranscription) => {
-                    // Handle session end - save to history
-                    console.log('Live session ended, full transcription:', fullTranscription);
-                    // TODO: Integrate with history API
-                  }}
-                />
-              </div>
-
-              <Separator className='my-2 invisible'/>
-
-              {/* Audio transcription settings card */}
-              {isUploaded && (
+              {/* Live mode waiting info - only show when live mode and not processed */}
+              {transcriptionMode === 'live' && !isProcessed && (
                 <Card className="md:col-span-2 flex flex-col">
-                  <CardHeader className="py-2">
-                    <h2 className="text-lg font-semibold mb-4">Step 2. Setup transcription parameters</h2>
-                  </CardHeader>
-                  {!false && (
                   <CardContent className="py-6">
-                    {/* Uploaded file info */}
-                    {uploadedFiles.length > 0 && (
-                      <div className="mb-6">
-                        <div className="text-xs text-muted-foreground mb-2 font-semibold">Uploaded file details:</div>
-                        <div className="space-y-2">
-                          {uploadedFiles.map((file, idx) => (
-                            <div
-                              key={file.filename + idx}
-                              className="rounded bg-muted/40 p-3 border border-muted-foreground/10 flex flex-col items-center"
-                            >
-                              <div className="flex items-center gap-4 w-full justify-center">
-                                <AudioLines className="h-8 w-8 text-blue-500" />
-                                <div className="font-mono text-sm text-foreground break-all">{file.filename_original}
-                                  <Separator className="my-1"/>
-                                  <div className="flex flex-wrap gap-4 mt-2 text-xs text-muted-foreground justify-center">
-                                    <div>Channels: <span className="font-semibold text-foreground">{file.inspect.channels}</span></div>
-                                    <div>Bits/Sample: <span className="font-semibold text-foreground">{file.inspect.bits_per_sample}</span></div>
-                                    <div>Sample/Frame Rate: <span className="font-semibold text-foreground">{file.inspect.samples_per_second || file.inspect.frame_rate} Hz</span></div>
-                                </div>
-                                </div>
-                                {selectedFiles[idx] && (
-                                  <audio
-                                    controls
-                                    src={URL.createObjectURL(selectedFiles[idx])}
-                                    className="h-8"
-                                    style={{ minWidth: 120 }}
-                                  />
-                                )}
-                              </div>
-                             
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <form className="space-y-6" onSubmit={handleTranscriptionSubmit}>
-                      {/* Model selection */}
-                      <div>
-                        <Label htmlFor="model" className="mb-2 block">Model selection:</Label>
-                        <Select value={model} onValueChange={setModel}>
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select model" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {/* <SelectItem value="msft">Microsoft</SelectItem> */}
-                            <SelectItem value="llm">LLM</SelectItem>
-                            <SelectItem value="whisper">Whisper</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {/* Language select */}
-                      {/* <div>
-                        <Label htmlFor="language" className="mb-2 block">Language:</Label>
-                        <Select value={language} onValueChange={setLanguage} disabled={model !== 'msft'}>
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select language" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="en-US">English (en-US)</SelectItem>
-                            <SelectItem value="cs-CZ">Czech (cs-CZ)</SelectItem>
-                            <SelectItem value="de-DE">German (de-DE)</SelectItem>
-                            <SelectItem value="uk-UA">Ukrainian (uk-UA)</SelectItem>
-                            <SelectItem value="ru-RU">Russian (ru-RU)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div> */}
-                      {/* Temperature slider - DISABLED */}
-                      {/* <div>
-                        <Label htmlFor="temperature" className="mb-2 block">Temperature: <span className="font-mono">{temperature.toFixed(2)}</span></Label>
-                        <Slider
-                          id="temperature"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={[temperature]}
-                          onValueChange={([val]) => setTemperature(val)}
-                        />
-                      </div> */}
-                      {/* Diarization switch - DISABLED */}
-                      {/* <div className="flex items-center space-x-2">
-                        <Switch
-                          id="diarization"
-                          checked={diarization}
-                          onCheckedChange={setDiarization}
-                        />
-                        <Label htmlFor="diarization">Diarization</Label>
-                      </div> */}
-                      {/* Combine switch - DISABLED */}
-                      {/* <div className="flex items-center space-x-2">
-                        <Switch
-                          id="combine"
-                          checked={combine}
-                          onCheckedChange={setCombine}
-                        />
-                        <Label htmlFor="combine">Combine</Label>
-                      </div> */}
-                      {/* Submit button */}
-                      <div>
-                        <Button type="submit" variant="default" disabled={isProcessing}>
-                          
-                          {isProcessing ? <Loader2 className="ml-2 h-4 w-4 animate-spin" /> : <AudioLines className="mr-1 inline h-4 w-4" />}
-                          {isProcessing ? 'Processing...' : 'Submit transcription'}
-                        </Button>
-                      </div>
-                    </form>
+                    <div className="text-center py-8 text-muted-foreground">
+                      <p className="text-sm">
+                        Výsledky live transkripce se zobrazí ve Step 3 po ukončení nahrávání.
+                      </p>
+                    </div>
                   </CardContent>
-                  )}
-                  {isProcessed && (
-                  <CardFooter className="flex flex-col space-y-2">
-                    <Check className="h-6 w-6 text-green-500" />
-                  </CardFooter>
-                  )}
                 </Card>
               )}
               
@@ -838,9 +885,13 @@ export default function App() {
               {isProcessed && allResults.length > 0 && (
                 <Card className="md:col-span-2 flex flex-col mt-4">
                   <CardHeader className="py-6">
-                    <h2 className="text-lg font-semibold mb-4">Step 3. Transcription Results</h2>
+                    <h2 className="text-lg font-semibold mb-4">
+                      {transcriptionMode === 'record' ? 'Step 3. Transcription Results' : 'Step 3. Live Session Results'}
+                    </h2>
                     <p className="text-sm text-muted-foreground">
-                      Session ID: {sessionID} | Elapsed Time: {sessionTime}
+                      {transcriptionMode === 'record' ? `Session ID: ${sessionID} | ` : ''}
+                      Elapsed Time: {sessionTime}
+                      {transcriptionMode === 'live' ? ' | Real-time transcription' : ''}
                     </p>
                   </CardHeader>
                   <CardContent className="py-6">
@@ -901,12 +952,13 @@ export default function App() {
                               </div>
                               {/* Transcript segments for this file */}
                               {results
-                                .filter(result => result.status === "transcribed" && result.message)
+                                .filter(result => result.status === "transcribed" && (result.message || result.text))
                                 .map((result, idx) => {
+                                  const resultText = result.message || result.text; // Support both formats
                                   // Calculate global index for playback functionality
                                   const globalIdx = allResults.findIndex(r => 
                                     r.filename === result.filename && 
-                                    r.message === result.message && 
+                                    (r.message === resultText || r.text === resultText) && 
                                     r.offset === result.offset
                                   );
                                   const SegmentIcon = (playingIdx === globalIdx && currentPlayingFile === filename) ? CirclePause : CirclePlay;
@@ -957,7 +1009,7 @@ export default function App() {
                                       </div>
                                       <div className="flex-1">
                                         <span className="block text-sm text-foreground">
-                                          {result.message}
+                                          {resultText}
                                         </span>
                                       </div>
                                     </div>
@@ -985,12 +1037,12 @@ export default function App() {
                           if (Object.keys(groupedResults).length > 0) {
                             text = Object.entries(groupedResults)
                               .map(([filename, results]) => {
-                                const transcriptedResults = results.filter(result => result.status === "transcribed" && result.message);
+                                const transcriptedResults = results.filter(result => result.status === "transcribed" && (result.message || result.text));
                                 if (transcriptedResults.length === 0) return '';
                                 
                                 const fileSection = `\n=== ${filename} ===\n\n` +
                                   transcriptedResults
-                                    .map(result => `${getSpeakerName(result.speaker_id, filename)}: ${result.message}`)
+                                    .map(result => `${getSpeakerName(result.speaker_id, filename)}: ${result.message || result.text}`)
                                     .join('\n');
                                 return fileSection;
                               })
@@ -999,9 +1051,9 @@ export default function App() {
                           } else {
                             // Fallback to original format
                             text = allResults
-                              .filter(result => result.status === "transcribed" && result.message)
+                              .filter(result => result.status === "transcribed" && (result.message || result.text))
                               .map(result =>
-                                `${getSpeakerName(result.speaker_id)}: ${result.message}`
+                                `${getSpeakerName(result.speaker_id)}: ${result.message || result.text}`
                               ).join('\n');
                           }
                           
@@ -1009,7 +1061,7 @@ export default function App() {
                           const url = URL.createObjectURL(blob);
                           const a = document.createElement('a');
                           a.href = url;
-                          a.download = `transcription_${sessionID || 'results'}.txt`;
+                          a.download = `transcription_${transcriptionMode === 'live' ? 'live-session' : sessionID || 'results'}.txt`;
                           document.body.appendChild(a);
                           a.click();
                           setTimeout(() => {
@@ -1017,7 +1069,7 @@ export default function App() {
                             URL.revokeObjectURL(url);
                           }, 100);
                         }}
-                        disabled={allResults.filter(result => result.status === "transcribed" && result.message).length === 0}
+                        disabled={allResults.filter(result => result.status === "transcribed" && (result.message || result.text)).length === 0}
                       >
                         <DownloadCloud /> Download Transcript(s)
                       </Button>
@@ -1037,9 +1089,11 @@ export default function App() {
               {isProcessed  && (
                 <Card className="md:col-span-2 flex flex-col mt-4">
                   <CardHeader className="py-6">
-                    <h2 className="text-lg font-semibold mb-4">Step 4. Analyze Transcript</h2>
+                    <h2 className="text-lg font-semibold mb-4">
+                      Step 4. Analyze {transcriptionMode === 'record' ? 'Transcript' : 'Live Session'}
+                    </h2>
                     <p className="text-sm text-muted-foreground mb-2">
-                      Paste or edit the transcript below, then click Analyze.
+                      Paste or edit the {transcriptionMode === 'record' ? 'transcript' : 'live session results'} below, then click Analyze.
                     </p>
                   </CardHeader>
                   <CardContent className="py-6">
@@ -1082,11 +1136,11 @@ export default function App() {
                           if (Object.keys(groupedResults).length > 0) {
                             text = Object.entries(groupedResults)
                               .map(([filename, results]) => {
-                                const transcriptedResults = results.filter(result => result.status === "transcribed" && result.message);
+                                const transcriptedResults = results.filter(result => result.status === "transcribed" && (result.message || result.text));
                                 if (transcriptedResults.length === 0) return '';
                                 const fileSection = `=== ${filename} ===\n\n` +
                                   transcriptedResults
-                                    .map(result => `${getSpeakerName(result.speaker_id, filename)}: ${result.message}`)
+                                    .map(result => `${getSpeakerName(result.speaker_id, filename)}: ${result.message || result.text}`)
                                     .join('\n');
                                 return fileSection;
                               })
@@ -1095,8 +1149,8 @@ export default function App() {
                           } else {
                             // Fallback to original format
                             text = allResults
-                              .filter(result => result.status === "transcribed" && result.message)
-                              .map(result => `${getSpeakerName(result.speaker_id)}: ${result.message}`)
+                              .filter(result => result.status === "transcribed" && (result.message || result.text))
+                              .map(result => `${getSpeakerName(result.speaker_id)}: ${result.message || result.text}`)
                               .join('\n');
                           }
                           setAnalysisText(text);
