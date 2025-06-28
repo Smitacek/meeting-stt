@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, UploadFile, HTTPException, Query, File, Form, Body
+from fastapi import FastAPI, Depends, UploadFile, HTTPException, Query, File, Form, Body, WebSocket, WebSocketDisconnect
 
 from fastapi.middleware.cors import CORSMiddleware
 # from fastapi.security import OAuth2AuthorizationCodeBearer
@@ -803,3 +803,329 @@ async def get_transcriptions_from_history(history_id: str):
     except Exception as e:
         logger.error(f"Error retrieving transcriptions from history: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve transcriptions from history")
+
+# WebSocket endpoint for real-time transcription
+@app.websocket("/ws/transcribe")
+async def websocket_transcribe(websocket: WebSocket):
+    """WebSocket endpoint for real-time audio transcription."""
+    logger = logging.getLogger("websocket_transcribe")
+    logger.setLevel(logging.INFO)
+    
+    await websocket.accept()
+    logger.info("WebSocket connection established")
+    
+    # Generate unique session ID
+    session_id = str(uuid.uuid4())
+    
+    # Initialize transcription handler
+    transcription_handler = None
+    
+    try:
+        # Send initial connection acknowledgment
+        await websocket.send_json({
+            "type": "connection",
+            "session_id": session_id,
+            "status": "connected"
+        })
+        
+        # Initialize transcription handler
+        # TODO: Switch to LiveTranscriptionHandler when audio conversion is ready
+        # from utils.transcription_live import LiveTranscriptionHandler
+        # transcription_handler = LiveTranscriptionHandler(session_id)
+        
+        # For now, use simple mock handler for testing
+        from utils.transcription_simple import SimpleTranscriptionHandler
+        transcription_handler = SimpleTranscriptionHandler(session_id)
+        
+        # Start transcription session
+        await transcription_handler.start_session()
+        
+        # Handle incoming messages
+        while True:
+            # WebSocket can receive either binary (audio) or text (control messages)
+            message = await websocket.receive()
+            
+            if "bytes" in message:
+                # Process audio chunk
+                await transcription_handler.process_audio_chunk(message["bytes"])
+            
+            elif "text" in message:
+                # Handle control messages (future use)
+                control_msg = json.loads(message["text"])
+                logger.info(f"Received control message: {control_msg}")
+                
+                if control_msg.get("type") == "stop":
+                    break
+            
+            # Check for transcription results
+            results = await transcription_handler.get_results()
+            if results:
+                await websocket.send_json({
+                    "type": "transcription",
+                    "results": results
+                })
+                
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}")
+        await websocket.send_json({
+            "type": "error",
+            "message": str(e)
+        })
+    finally:
+        # Clean up transcription session
+        if transcription_handler:
+            await transcription_handler.stop_session()
+        try:
+            await websocket.close()
+        except:
+            pass
+        logger.info(f"WebSocket session {session_id} closed")
+
+# Stateless live transcription endpoints
+@app.post("/live/transcribe")
+async def process_live_audio(
+    audio_file: UploadFile = File(...),
+    session_id: str = Form("default")
+):
+    """
+    Continuous live transcription using Azure Speech Service with PushAudioInputStream.
+    Uses proper streaming pattern instead of separate sessions per chunk.
+    """
+    logger = logging.getLogger("process_live_audio")
+    
+    try:
+        # Read audio data
+        audio_data = await audio_file.read()
+        chunk_size = len(audio_data)
+        
+        logger.info(f"Processing audio chunk: {chunk_size} bytes for session: {session_id}")
+        
+        # Use Azure Speech Service for real transcription with continuous session
+        from utils.transcription_live_direct import process_audio_chunk_direct
+        
+        try:
+            # Process with Azure Speech Service using continuous session
+            transcription_result = await process_audio_chunk_direct(audio_data, session_id)
+            
+            if transcription_result and transcription_result.get("success"):
+                results = transcription_result.get("results", [])
+                logger.info(f"Azure Speech API returned {len(results)} transcription segments")
+                
+                # If Azure returns empty results, don't fallback to mock - just return empty
+                # This allows continuous recording without mixing mock data
+                return {
+                    "results": results,
+                    "chunk_info": {
+                        "size_bytes": chunk_size,
+                        "processed_at": time.time(),
+                        "segments_generated": len(results),
+                        "service": "Azure Speech Service",
+                        "note": "Empty results are normal for silence or unclear audio"
+                    }
+                }
+            else:
+                # Only fallback on actual Azure service failure
+                error_msg = transcription_result.get("error", "Unknown Azure error")
+                logger.warning(f"Azure Speech Service failed: {error_msg}")
+                
+                # Check if it's credentials issue vs temporary failure
+                if "credentials" in error_msg.lower() or "authentication" in error_msg.lower():
+                    # Permanent failure - use mock
+                    logger.error("Azure credentials issue - falling back to mock")
+                    return await _generate_mock_transcription(audio_data, chunk_size)
+                else:
+                    # Temporary failure - return empty results to continue Azure attempts
+                    logger.warning("Temporary Azure failure - returning empty results")
+                    return {
+                        "results": [],
+                        "chunk_info": {
+                            "size_bytes": chunk_size,
+                            "processed_at": time.time(),
+                            "segments_generated": 0,
+                            "service": "Azure Speech Service (temporary failure)",
+                            "error": error_msg
+                        }
+                    }
+                
+        except Exception as azure_error:
+            logger.error(f"Azure Speech Service exception: {str(azure_error)}")
+            
+            # Check if it's import error (module not available)
+            if "No module named" in str(azure_error) or "ImportError" in str(azure_error):
+                logger.error("Azure Speech SDK not available - falling back to mock")
+                return await _generate_mock_transcription(audio_data, chunk_size)
+            else:
+                # Other exceptions - continue trying Azure
+                return {
+                    "results": [],
+                    "chunk_info": {
+                        "size_bytes": chunk_size,
+                        "processed_at": time.time(),
+                        "segments_generated": 0,
+                        "service": "Azure Speech Service (exception)",
+                        "error": str(azure_error)
+                    }
+                }
+    
+    except Exception as e:
+        logger.error(f"Error processing live audio: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process audio: {str(e)}")
+
+async def _generate_mock_transcription(audio_data: bytes, chunk_size: int):
+    """Fallback mock transcription when Azure Speech Service is unavailable."""
+    logger = logging.getLogger("mock_transcription")
+    
+    # Simple hash-based deterministic speaker assignment
+    speaker_hash = hash(audio_data[:100]) % 3 + 1  # 3 possible speakers
+    
+    # Generate mock transcription
+    current_time = time.time()
+    results = []
+    
+    # Generate 1-2 transcription segments per chunk
+    num_segments = 1 if chunk_size < 50000 else 2
+    
+    for i in range(num_segments):
+        result = {
+            "speaker": f"Mluvčí {speaker_hash}",
+            "text": f"[MOCK] Simulovaný přepis audio segmentu {i+1}. Velikost: {chunk_size} bytes.",
+            "offset": i * 2.0,  # 2 second segments
+            "duration": 2.0,
+            "timestamp": current_time + (i * 2.0),
+            "confidence": 0.85 + (chunk_size % 100) / 1000  # Mock confidence
+        }
+        results.append(result)
+    
+    logger.info(f"Generated mock transcription: {len(results)} segments")
+    
+    return {
+        "results": results,
+        "chunk_info": {
+            "size_bytes": chunk_size,
+            "processed_at": current_time,
+            "segments_generated": len(results),
+            "service": "Mock Service (Fallback)"
+        }
+    }
+
+# Legacy endpoints - kept for backward compatibility, will be removed in future versions
+@app.post("/live/start")
+async def start_live_session_legacy():
+    """DEPRECATED: Use /live/transcribe for stateless approach."""
+    return {
+        "message": "This endpoint is deprecated. Use POST /live/transcribe for stateless live transcription.",
+        "session_id": str(uuid.uuid4()),
+        "status": "deprecated"
+    }
+
+@app.get("/live/status")
+async def get_live_status():
+    """Get status of live transcription service."""
+    # Check Azure Speech Service availability
+    azure_available = bool(os.getenv("AZURE_SPEECH_KEY") or os.getenv("AZURE_CLIENT_ID"))
+    ffmpeg_available = await _check_ffmpeg_availability()
+    
+    return {
+        "service": "Live Transcription",
+        "mode": "Stateless",
+        "version": "v2.1",
+        "azure_speech_available": azure_available,
+        "ffmpeg_available": ffmpeg_available,
+        "endpoints": {
+            "transcribe": "POST /live/transcribe - Upload audio chunk and get immediate results",
+            "status": "GET /live/status - This endpoint",
+            "test": "GET /live/test - Test endpoint"
+        },
+        "supported_formats": ["audio/webm", "audio/wav", "audio/ogg"],
+        "fallback": "Mock transcription when Azure unavailable",
+        "replica_friendly": True,
+        "timestamp": time.time()
+    }
+
+async def _check_ffmpeg_availability():
+    """Check if FFmpeg is available for audio conversion."""
+    try:
+        import subprocess
+        process = await asyncio.create_subprocess_exec(
+            'ffmpeg', '-version',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await process.communicate()
+        return process.returncode == 0
+    except:
+        return False
+
+@app.post("/live/test")
+async def test_live_transcription(use_azure: bool = True):
+    """Test live transcription with dummy audio data."""
+    logger = logging.getLogger("test_live_transcription")
+    
+    try:
+        # Create dummy WebM audio data for testing
+        dummy_audio = b"dummy audio data for testing Azure Speech Service" * 500
+        
+        if use_azure:
+            from utils.transcription_live_direct import process_audio_chunk_direct
+            result = await process_audio_chunk_direct(dummy_audio)
+            
+            return {
+                "test_type": "Azure Speech Service",
+                "success": result.get("success", False),
+                "results_count": len(result.get("results", [])),
+                "error": result.get("error"),
+                "processing_info": result.get("processing_info", {}),
+                "timestamp": time.time()
+            }
+        else:
+            # Test mock transcription
+            mock_result = await _generate_mock_transcription(dummy_audio, len(dummy_audio))
+            
+            return {
+                "test_type": "Mock Transcription",
+                "success": True,
+                "results_count": len(mock_result.get("results", [])),
+                "chunk_info": mock_result.get("chunk_info", {}),
+                "timestamp": time.time()
+            }
+            
+    except Exception as e:
+        logger.error(f"Test failed: {str(e)}")
+        return {
+            "test_type": "Azure Speech Service" if use_azure else "Mock",
+            "success": False,
+            "error": str(e),
+            "timestamp": time.time()
+        }
+
+@app.post("/live/stop")
+async def stop_live_transcription(session_id: str = Form("default")):
+    """Stop and cleanup Azure Speech Service session."""
+    logger = logging.getLogger("stop_live_transcription")
+    
+    try:
+        from utils.transcription_live_direct import cleanup_session
+        await cleanup_session(session_id)
+        
+        logger.info(f"Stopped live transcription session: {session_id}")
+        return {
+            "status": "stopped",
+            "session_id": session_id,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error stopping session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop session: {str(e)}")
+
+@app.get("/live/test")
+async def test_live_endpoint():
+    """Test endpoint to verify deployment."""
+    return {
+        "message": "Live endpoints are working",
+        "version": "v2.0",
+        "has_sessions_attr": hasattr(app.state, 'live_sessions'),
+        "timestamp": time.time()
+    }

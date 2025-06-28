@@ -20,8 +20,21 @@ COPY . /code
 RUN uv sync --locked --no-dev
 ENV PATH="/code/.venv/bin:$PATH"
 
-# install ffmpeg for audio processing
-RUN apt-get update && apt-get install -y ffmpeg
+# GStreamer environment variables
+ENV GST_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/gstreamer-1.0
+ENV GST_DEBUG=2
+
+# install ffmpeg and gstreamer for audio processing
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 
 # Expose the port that the app will run on

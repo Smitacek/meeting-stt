@@ -57,6 +57,7 @@ import {
 import axios from 'axios';
 import { Footer } from "@/components/Footer";
 import { MarkdownRenderer } from "@/components/markdown-display";
+import { LiveRecordingStateless } from "@/components/LiveRecordingStateless";
 
 // import AnalysisResultDisplay from "@/components/AnalysisResultDisplay";
 
@@ -686,9 +687,29 @@ export default function App() {
               </Card>
               <Separator className='my-2 invisible'/>
 
+              {/* OR Live Recording */}
+              <div className="md:col-span-2 flex items-center gap-4 my-4">
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-sm text-muted-foreground font-medium">NEBO</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
 
+              {/* Live Recording */}
+              <div className="md:col-span-2">
+                <LiveRecordingStateless 
+                  onTranscriptionUpdate={(results) => {
+                    // Handle live transcription updates
+                    console.log('Live transcription update:', results);
+                  }}
+                  onSessionEnd={(fullTranscription) => {
+                    // Handle session end - save to history
+                    console.log('Live session ended, full transcription:', fullTranscription);
+                    // TODO: Integrate with history API
+                  }}
+                />
+              </div>
 
-
+              <Separator className='my-2 invisible'/>
 
               {/* Audio transcription settings card */}
               {isUploaded && (
