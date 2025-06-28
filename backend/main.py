@@ -54,8 +54,8 @@ async def lifespan(app: FastAPI):
     # Shutdown code (optional)
     # Cleanup database connection
     app.state.db = None
-    # Clear history state
-    app.state.history = None
+    # Clear history state (don't set to None to avoid errors)
+    # app.state.history = None
 
 app = FastAPI(lifespan=lifespan)
 # app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, dependencies=[Depends(ensure_valid_api_key)])
@@ -729,14 +729,21 @@ async def get_all_history(
     logger.setLevel(logging.INFO)
     
     try:
+        # Debug logging
+        logger.info(f"app.state.history type: {type(app.state.history)}")
+        logger.info(f"app.state.history value: {app.state.history}")
+        
         histories = app.state.history if app.state.history else []
+        logger.info(f"Total history records in memory: {len(histories)}")
+        
         if visible_only:
             histories = [h for h in histories if h.visible]
+            logger.info(f"Visible history records: {len(histories)}")
         
         # Apply limit
         histories = histories[:limit]
         
-        logger.info(f"Retrieved {len(histories)} history records")
+        logger.info(f"Retrieved {len(histories)} history records (after limit)")
         return {
             "status": "success",
             "count": len(histories),
@@ -746,6 +753,15 @@ async def get_all_history(
         logger.error(f"Error retrieving all history: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve history records")
 
+@app.get("/debug/history")
+async def debug_history():
+    """Debug endpoint to check history state."""
+    return {
+        "history_type": str(type(app.state.history)),
+        "history_count": len(app.state.history) if app.state.history else 0,
+        "history_is_none": app.state.history is None,
+        "history_preview": app.state.history[:3] if app.state.history else []
+    }
 
 @app.post("/history/{history_id}/transcription/{transcription_index}/analysis")
 async def add_analysis_to_transcription(
