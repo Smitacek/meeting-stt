@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Mic, Loader2, AlertCircle, Users, Wifi, Pause, Play, Clock, Square } from 'lucide-react';
+import { Mic, Loader2, AlertCircle, Users, Wifi, Pause, Play, Clock, Square, Volume2, VolumeX } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
 
@@ -45,9 +45,18 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
   const [lastPauseTime, setLastPauseTime] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(0); // Current elapsed time in seconds
   
+  // Audio level monitoring
+  const [audioLevel, setAudioLevel] = useState<number>(0); // 0-100%
+  const [isAudioTooLow, setIsAudioTooLow] = useState<boolean>(false);
+  const [isAudioTooHigh, setIsAudioTooHigh] = useState<boolean>(false);
+  
   const conversationRef = useRef<SpeechSDK.ConversationTranscriber | null>(null);
   const sessionIdRef = useRef<string>('');
   const timeUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   
   // Utility functions for time management
   const formatTime = useCallback((seconds: number) => {
@@ -80,6 +89,110 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
     const limitSeconds = timeLimit * 60;
     return Math.min(100, (elapsed / limitSeconds) * 100);
   }, [getElapsedSeconds, timeLimit]);
+  
+  // Audio level monitoring functions
+  const setupAudioLevelMonitoring = useCallback(async () => {
+    try {
+      // Get microphone stream (same constraints as Azure Speech SDK)
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 16000  // Match Azure Speech SDK
+        } 
+      });
+      
+      microphoneStreamRef.current = stream;
+      
+      // Create Web Audio API context
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      
+      // Create analyser node for audio level detection
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      analyserRef.current = analyser;
+      
+      // Connect microphone to analyser
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      
+      // Start audio level monitoring
+      startAudioLevelAnalysis();
+      
+      console.log('Audio level monitoring setup complete');
+      return stream;
+      
+    } catch (error) {
+      console.error('Failed to setup audio level monitoring:', error);
+      throw error;
+    }
+  }, []);
+  
+  const startAudioLevelAnalysis = useCallback(() => {
+    if (!analyserRef.current) return;
+    
+    const analyser = analyserRef.current;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    
+    const updateAudioLevel = () => {
+      if (!analyser) {
+        return;
+      }
+      
+      // Continue monitoring even when transcription is paused
+      
+      analyser.getByteFrequencyData(dataArray);
+      
+      // Calculate RMS (Root Mean Square) for more accurate level detection
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        sum += (dataArray[i] / 255) * (dataArray[i] / 255);
+      }
+      const rms = Math.sqrt(sum / bufferLength);
+      const level = Math.round(rms * 100);
+      
+      setAudioLevel(level);
+      
+      // Threshold detection
+      setIsAudioTooLow(level < 5);  // Less than 5% - too quiet
+      setIsAudioTooHigh(level > 85); // More than 85% - too loud
+      
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+    };
+    
+    updateAudioLevel();
+  }, [isPaused]);
+  
+  const stopAudioLevelMonitoring = useCallback(() => {
+    // Stop animation frame
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    
+    // Close audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    
+    // Stop microphone stream
+    if (microphoneStreamRef.current) {
+      microphoneStreamRef.current.getTracks().forEach(track => track.stop());
+      microphoneStreamRef.current = null;
+    }
+    
+    // Reset audio level state
+    setAudioLevel(0);
+    setIsAudioTooLow(false);
+    setIsAudioTooHigh(false);
+    
+    console.log('Audio level monitoring stopped');
+  }, []);
   
   // Color palette for speakers
   const colorPalette = [
@@ -264,6 +377,9 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
       
       console.log('Starting Azure Speech SDK recording with diarization...');
       
+      // Setup audio level monitoring first
+      await setupAudioLevelMonitoring();
+      
       // Get token from backend
       const tokenData = await getAzureToken();
       setServiceInfo(tokenData);
@@ -328,12 +444,16 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
       );
     }
     
+    // Stop audio level monitoring
+    stopAudioLevelMonitoring();
+    
     // Call session end callback
     if (onSessionEnd) {
       onSessionEnd(transcriptionResults);
     }
     
     setIsRecording(false);
+    setIsPaused(false);
     setConnectionStatus('disconnected');
     console.log(`Azure Speech session ended. Total results: ${transcriptionResults.length}`);
   }, [transcriptionResults, onSessionEnd]);
@@ -409,8 +529,9 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
       if (conversationRef.current) {
         conversationRef.current.close();
       }
+      stopAudioLevelMonitoring();
     };
-  }, []);
+  }, [stopAudioLevelMonitoring]);
   
   return (
     <Card className="w-full">
@@ -499,6 +620,57 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
             </span>
           )}
         </div>
+        
+        {/* Audio Level Meter */}
+        {(isRecording || isConnecting) && (
+          <div className="p-4 bg-muted/30 rounded-lg border">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Volume2 className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Audio Input Level</span>
+              </div>
+              <span className="text-sm text-muted-foreground">
+                {audioLevel}%
+              </span>
+            </div>
+            
+            {/* Audio level progress bar */}
+            <div className="w-full bg-muted rounded-full h-3 mb-2">
+              <div 
+                className={`h-3 rounded-full transition-all duration-150 ${
+                  isAudioTooHigh ? 'bg-red-500' : 
+                  isAudioTooLow ? 'bg-yellow-500' : 
+                  audioLevel > 50 ? 'bg-green-500' : 
+                  audioLevel > 20 ? 'bg-blue-500' : 
+                  'bg-gray-400'
+                }`}
+                style={{ width: `${Math.min(audioLevel, 100)}%` }}
+              />
+            </div>
+            
+            {/* Audio level warnings */}
+            {isAudioTooLow && (
+              <div className="flex items-center gap-2 text-yellow-600 text-sm">
+                <VolumeX className="h-4 w-4" />
+                <span>Příliš tichý vstup - mluvte blíže k mikrofonu</span>
+              </div>
+            )}
+            
+            {isAudioTooHigh && (
+              <div className="flex items-center gap-2 text-red-600 text-sm">
+                <Volume2 className="h-4 w-4" />
+                <span>Příliš hlasitý vstup - snižte hlasitost nebo vzdalte se od mikrofonu</span>
+              </div>
+            )}
+            
+            {!isAudioTooLow && !isAudioTooHigh && audioLevel > 0 && (
+              <div className="flex items-center gap-2 text-green-600 text-sm">
+                <Volume2 className="h-4 w-4" />
+                <span>Optimální úroveň audio vstupu</span>
+              </div>
+            )}
+          </div>
+        )}
         
         {/* Session progress and time limit */}
         {isRecording && (
