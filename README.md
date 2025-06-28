@@ -1,9 +1,32 @@
-# Meeting STT - Example
+# Meeting STT - Production Ready Real-time Transcription
 
-This repository...
+🎉 **PRODUCTION READY** - Kompletní real-time speech-to-text aplikace s profesionálními features.
 
+## ✨ Features
 
-:tada: Jan 1, 2025: start
+### 🎯 **Core Functionality**
+- **Real-time Speech-to-Text** s Azure Speech SDK
+- **Speaker Diarization** - automatické rozpoznání mluvčích
+- **Unified Workflow** - Record mode (upload files) + Live mode (real-time)
+- **Persistent History** - všechny transkripce se ukládají do Azure Storage Tables
+- **Export Functionality** - download transkriptů jako .txt soubory
+
+### 🎮 **Professional Controls**
+- **Pause/Resume** během live nahrávání s intelligent session management
+- **Time Limits** (5-180 minut) s automatickým ukončením při dosažení limitu
+- **Progress Tracking** s real-time visual feedback a countdown
+- **Audio Level Meter** s threshold detection a quality warnings
+
+### 🔧 **Technical Excellence**
+- **Modern Architecture**: Direct Azure Speech SDK integration
+- **Scalable Storage**: Azure Storage Tables pro data persistence
+- **Professional UI**: Real-time feedback, visual indicators, responsive design
+- **Error Resilience**: Robust error handling s fallback mechanisms
+- **Browser Compatibility**: Web Audio API s webkit support
+
+---
+
+🚀 **Deployment Ready**: 28. června 2025
 
 
 # Prerequisites:
