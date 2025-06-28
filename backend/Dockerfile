@@ -17,7 +17,7 @@ ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
 COPY . /code
-RUN uv sync --locked --no-dev
+RUN uv lock && uv sync --no-dev
 ENV PATH="/code/.venv/bin:$PATH"
 
 # GStreamer environment variables
