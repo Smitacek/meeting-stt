@@ -848,7 +848,7 @@ export default function App() {
                         'Live Session': [...(prev['Live Session'] || []), ...convertedResults]
                       }));
                     }}
-                    onSessionEnd={(fullTranscription) => {
+                    onSessionEnd={async (fullTranscription) => {
                       // Handle session end - same as batch processing
                       console.log('Live session ended, full transcription:', fullTranscription);
                       setIsProcessed(true);
@@ -859,6 +859,29 @@ export default function App() {
                         const minutes = Math.floor(elapsedTime / 60000);
                         const seconds = Math.floor((elapsedTime % 60000) / 1000);
                         setSessionTime(`${minutes}:${seconds < 10 ? '0' : ''}${seconds}`);
+                      }
+                      
+                      // Save live session to history
+                      try {
+                        console.log('Saving live session to history...');
+                        const formData = new FormData();
+                        formData.append('user_id', userInfo.email);
+                        formData.append('session_id', userInfo.sessionId);
+                        formData.append('transcription_data', JSON.stringify(fullTranscription));
+                        
+                        const response = await fetch(`${BASE_URL}/live/save`, {
+                          method: 'POST',
+                          body: formData,
+                        });
+                        
+                        if (response.ok) {
+                          const result = await response.json();
+                          console.log('Live session saved to history:', result);
+                        } else {
+                          console.error('Failed to save live session:', response.statusText);
+                        }
+                      } catch (error) {
+                        console.error('Error saving live session:', error);
                       }
                     }}
                   />

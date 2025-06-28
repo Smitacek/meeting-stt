@@ -965,6 +965,79 @@ async def get_speech_token():
             "mock_mode": True
         }
 
+@app.post("/live/save")
+async def save_live_session(
+    user_id: str = Form(...),
+    session_id: str = Form(...),
+    transcription_data: str = Form(...)
+):
+    """
+    Save live transcription session to history.
+    Compatible with existing batch processing workflow.
+    """
+    logger = logging.getLogger("save_live_session")
+    
+    try:
+        import json
+        
+        # Parse transcription data from frontend
+        transcription_results = json.loads(transcription_data)
+        logger.info(f"Saving live session for user {user_id}, session {session_id}")
+        logger.info(f"Transcription data contains {len(transcription_results)} results")
+        
+        # Create history record
+        history_record = add_history_record(user_id, session_id, "live_transcription")
+        logger.info(f"Created history record: {history_record.id}")
+        
+        # Convert live results to Transcript_chunk format
+        transcript_chunks = []
+        for result in transcription_results:
+            chunk = Transcript_chunk(
+                event_type="transcribed",
+                session=session_id,
+                offset=int(result.get('offset', 0) * 10000000),  # Convert seconds to 100ns units
+                duration=int(result.get('duration', 2.0) * 10000000),  # Convert seconds to 100ns units
+                text=result.get('text', ''),
+                speaker_id=result.get('speaker', 'Unknown'),
+                filename="Live Session",
+                language="cs-CZ"  # Default language
+            )
+            transcript_chunks.append(chunk)
+        
+        # Create transcription record
+        transcription_record = Transcription(
+            file_name="Live Session",
+            file_name_original="live://session",
+            transcript_chunks=transcript_chunks,
+            language="cs-CZ",
+            model="azure_speech_sdk",
+            temperature=0.0,
+            diarization="true",
+            combine="false",
+            status="completed"
+        )
+        
+        # Add transcription to history
+        success = add_transcription_to_history(history_record.id, transcription_record)
+        
+        if success:
+            logger.info(f"Successfully saved live session to history: {history_record.id}")
+            return {
+                "success": True,
+                "history_id": history_record.id,
+                "message": "Live session saved to history"
+            }
+        else:
+            logger.error("Failed to add transcription to history")
+            raise HTTPException(status_code=500, detail="Failed to save transcription to history")
+            
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in transcription_data: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid transcription data format")
+    except Exception as e:
+        logger.error(f"Error saving live session: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to save live session")
+
 async def _generate_mock_transcription(audio_data: bytes, chunk_size: int):
     """Fallback mock transcription when Azure Speech Service is unavailable."""
     logger = logging.getLogger("mock_transcription")
