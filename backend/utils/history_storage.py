@@ -31,18 +31,32 @@ class HistoryStorage:
         storage_endpoint = os.getenv("AZURE_STORAGE_ACCOUNT_ENDPOINT")
         
         if not all([storage_account_name, storage_account_key, storage_endpoint]):
-            raise ValueError("Missing required Azure Storage credentials in environment variables")
+            self.logger.warning("Missing Azure Storage credentials, will use fallback in-memory storage")
+            self.use_azure_tables = False
+            self._init_in_memory_storage()
+            return
+        
+        self.use_azure_tables = True
         
         # Initialize Table Service Client
         try:
-            # Use account key authentication (more reliable than DefaultAzureCredential for tables)
-            account_url = f"https://{storage_account_name}.table.core.windows.net/"
-            credential = storage_account_key
-            
-            self.table_service = TableServiceClient(
-                endpoint=account_url,
-                credential=credential
-            )
+            # Try different authentication methods
+            if storage_account_key:
+                # Use account key authentication
+                account_url = f"https://{storage_account_name}.table.core.windows.net/"
+                self.table_service = TableServiceClient(
+                    endpoint=account_url,
+                    credential=storage_account_key
+                )
+                self.logger.info("Using storage account key authentication")
+            else:
+                # Fallback to DefaultAzureCredential
+                account_url = f"https://{storage_account_name}.table.core.windows.net/"
+                self.table_service = TableServiceClient(
+                    endpoint=account_url,
+                    credential=DefaultAzureCredential()
+                )
+                self.logger.info("Using DefaultAzureCredential authentication")
             
             # Table names
             self.history_table_name = "TranscriptionHistory"
@@ -55,7 +69,15 @@ class HistoryStorage:
             
         except Exception as e:
             self.logger.error(f"Failed to initialize HistoryStorage: {str(e)}")
-            raise
+            self.logger.warning("Falling back to in-memory storage")
+            self.use_azure_tables = False
+            self._init_in_memory_storage()
+    
+    def _init_in_memory_storage(self):
+        """Initialize in-memory storage as fallback."""
+        self.memory_history = {}
+        self.memory_transcriptions = {}
+        self.logger.info("In-memory storage initialized")
     
     def _ensure_tables_exist(self):
         """Create tables if they don't exist."""
@@ -96,6 +118,13 @@ class HistoryStorage:
             transcriptions=[]
         )
         
+        if not self.use_azure_tables:
+            # In-memory fallback
+            self.memory_history[history_id] = history_record
+            self.logger.info(f"Added history record {history_id} to memory storage")
+            return history_record
+        
+        # Azure Tables implementation
         # Convert to table entity
         entity = {
             "PartitionKey": user_id,  # Partition by user for efficient queries
@@ -216,6 +245,14 @@ class HistoryStorage:
     def get_all_history(self, visible_only: bool = True, limit: int = 100) -> List[History]:
         """Get all history records with optional filtering."""
         try:
+            if not self.use_azure_tables:
+                # In-memory fallback
+                histories = list(self.memory_history.values())
+                if visible_only:
+                    histories = [h for h in histories if h.visible]
+                return histories[:limit]
+            
+            # Azure Tables implementation
             history_table = self.table_service.get_table_client(self.history_table_name)
             
             # Build filter query
@@ -337,6 +374,17 @@ class HistoryStorage:
         try:
             self.logger.info(f"Starting toggle_history_visibility for {history_id} to {visible}")
             
+            if not self.use_azure_tables:
+                # In-memory fallback
+                if history_id in self.memory_history:
+                    self.memory_history[history_id].visible = visible
+                    self.logger.info(f"Updated in-memory history {history_id} visibility to {visible}")
+                    return True
+                else:
+                    self.logger.warning(f"History record {history_id} not found in memory")
+                    return False
+            
+            # Azure Tables implementation
             # First find the history record
             history_record = self.get_history_by_id(history_id)
             if not history_record:
