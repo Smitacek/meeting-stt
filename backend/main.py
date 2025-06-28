@@ -69,51 +69,95 @@ app.add_middleware(
 )
 
 
-# Helper functions for history management
+# Import persistent storage
+from utils.history_storage import get_history_storage
+
+# Helper functions for history management (now using persistent storage)
 def add_history_record(user_id: str, session_id: str, history_type: str = "transcription") -> History:
-    """Create a new history record and add it to the application state."""
-    history_id = str(uuid.uuid4())
-    history_record = History(
-        id=history_id,
-        user_id=user_id,
-        session_id=session_id,
-        type=history_type
-    )
-    app.state.history.append(history_record)
-    return history_record
+    """Create a new history record and store it persistently."""
+    try:
+        storage = get_history_storage()
+        return storage.add_history_record(user_id, session_id, history_type)
+    except Exception as e:
+        logger = logging.getLogger("add_history_record")
+        logger.error(f"Failed to create history record: {str(e)}")
+        # Fallback to in-memory if storage fails
+        history_id = str(uuid.uuid4())
+        history_record = History(
+            id=history_id,
+            user_id=user_id,
+            session_id=session_id,
+            type=history_type
+        )
+        if not hasattr(app.state, 'history') or app.state.history is None:
+            app.state.history = []
+        app.state.history.append(history_record)
+        return history_record
 
 def add_transcription_to_history(history_id: str, transcription: Transcription) -> bool:
     """Add a transcription to an existing history record."""
-    for history_record in app.state.history:
-        if history_record.id == history_id:
-            history_record.transcriptions.append(transcription)
-            return True
-    return False
+    try:
+        storage = get_history_storage()
+        return storage.add_transcription_to_history(history_id, transcription)
+    except Exception as e:
+        logger = logging.getLogger("add_transcription_to_history")
+        logger.error(f"Failed to add transcription to storage: {str(e)}")
+        # Fallback to in-memory
+        if hasattr(app.state, 'history') and app.state.history:
+            for history_record in app.state.history:
+                if history_record.id == history_id:
+                    history_record.transcriptions.append(transcription)
+                    return True
+        return False
 
 def get_history_by_id(history_id: str) -> History:
     """Get a history record by its ID."""
-    for history_record in app.state.history:
-        if history_record.id == history_id:
-            return history_record
-    return None
+    try:
+        storage = get_history_storage()
+        return storage.get_history_by_id(history_id)
+    except Exception as e:
+        logger = logging.getLogger("get_history_by_id")
+        logger.error(f"Failed to get history from storage: {str(e)}")
+        # Fallback to in-memory
+        if hasattr(app.state, 'history') and app.state.history:
+            for history_record in app.state.history:
+                if history_record.id == history_id:
+                    return history_record
+        return None
 
 def get_user_history(user_id: str, visible_only: bool = True) -> List[History]:
     """Get all history records for a specific user."""
-    user_histories = []
-    for history_record in app.state.history:
-        if history_record.user_id == user_id:
-            if not visible_only or history_record.visible:
-                user_histories.append(history_record)
-    return user_histories
+    try:
+        storage = get_history_storage()
+        return storage.get_user_history(user_id, visible_only)
+    except Exception as e:
+        logger = logging.getLogger("get_user_history")
+        logger.error(f"Failed to get user history from storage: {str(e)}")
+        # Fallback to in-memory
+        user_histories = []
+        if hasattr(app.state, 'history') and app.state.history:
+            for history_record in app.state.history:
+                if history_record.user_id == user_id:
+                    if not visible_only or history_record.visible:
+                        user_histories.append(history_record)
+        return user_histories
 
 def get_session_history(session_id: str, visible_only: bool = True) -> List[History]:
     """Get all history records for a specific session."""
-    session_histories = []
-    for history_record in app.state.history:
-        if history_record.session_id == session_id:
-            if not visible_only or history_record.visible:
-                session_histories.append(history_record)
-    return session_histories
+    try:
+        storage = get_history_storage()
+        return storage.get_session_history(session_id, visible_only)
+    except Exception as e:
+        logger = logging.getLogger("get_session_history")
+        logger.error(f"Failed to get session history from storage: {str(e)}")
+        # Fallback to in-memory
+        session_histories = []
+        if hasattr(app.state, 'history') and app.state.history:
+            for history_record in app.state.history:
+                if history_record.session_id == session_id:
+                    if not visible_only or history_record.visible:
+                        session_histories.append(history_record)
+        return session_histories
 
 
 def get_current_time():
@@ -701,11 +745,13 @@ async def toggle_history_visibility(
     logger.setLevel(logging.INFO)
     
     try:
-        history_record = get_history_by_id(history_id)
-        if not history_record:
+        # Use persistent storage to toggle visibility
+        storage = get_history_storage()
+        success = storage.toggle_history_visibility(history_id, visible)
+        
+        if not success:
             raise HTTPException(status_code=404, detail="History record not found")
         
-        history_record.visible = visible
         logger.info(f"Updated visibility for history record {history_id} to {visible}")
         return {
             "status": "success",
@@ -729,21 +775,11 @@ async def get_all_history(
     logger.setLevel(logging.INFO)
     
     try:
-        # Debug logging
-        logger.info(f"app.state.history type: {type(app.state.history)}")
-        logger.info(f"app.state.history value: {app.state.history}")
+        # Use persistent storage
+        storage = get_history_storage()
+        histories = storage.get_all_history(visible_only, limit)
         
-        histories = app.state.history if app.state.history else []
-        logger.info(f"Total history records in memory: {len(histories)}")
-        
-        if visible_only:
-            histories = [h for h in histories if h.visible]
-            logger.info(f"Visible history records: {len(histories)}")
-        
-        # Apply limit
-        histories = histories[:limit]
-        
-        logger.info(f"Retrieved {len(histories)} history records (after limit)")
+        logger.info(f"Retrieved {len(histories)} history records from persistent storage")
         return {
             "status": "success",
             "count": len(histories),
@@ -751,7 +787,22 @@ async def get_all_history(
         }
     except Exception as e:
         logger.error(f"Error retrieving all history: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve history records")
+        # Fallback to in-memory storage
+        try:
+            logger.warning("Falling back to in-memory storage")
+            histories = app.state.history if app.state.history else []
+            if visible_only:
+                histories = [h for h in histories if h.visible]
+            histories = histories[:limit]
+            
+            return {
+                "status": "success",
+                "count": len(histories),
+                "histories": histories,
+                "fallback_mode": True
+            }
+        except:
+            raise HTTPException(status_code=500, detail="Failed to retrieve history records")
 
 @app.get("/debug/history")
 async def debug_history():
