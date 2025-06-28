@@ -249,6 +249,7 @@ export default function HistoryPage() {
                         <SelectContent>
                           <SelectItem value="all">All Types</SelectItem>
                           <SelectItem value="transcription">Transcription</SelectItem>
+                          <SelectItem value="live_transcription">Live Transcription</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

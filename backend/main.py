@@ -745,14 +745,20 @@ async def toggle_history_visibility(
     logger.setLevel(logging.INFO)
     
     try:
+        logger.info(f"Attempting to toggle visibility for history_id: {history_id}, visible: {visible}")
+        
         # Use persistent storage to toggle visibility
         storage = get_history_storage()
+        logger.info(f"Got storage instance: {type(storage)}")
+        
         success = storage.toggle_history_visibility(history_id, visible)
+        logger.info(f"Toggle operation result: {success}")
         
         if not success:
+            logger.warning(f"History record {history_id} not found")
             raise HTTPException(status_code=404, detail="History record not found")
         
-        logger.info(f"Updated visibility for history record {history_id} to {visible}")
+        logger.info(f"Successfully updated visibility for history record {history_id} to {visible}")
         return {
             "status": "success",
             "history_id": history_id,
@@ -762,8 +768,8 @@ async def toggle_history_visibility(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating history visibility: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to update history visibility")
+        logger.error(f"Error updating history visibility: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update history visibility: {str(e)}")
 
 @app.get("/history")
 async def get_all_history(

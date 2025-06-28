@@ -335,10 +335,15 @@ class HistoryStorage:
     def toggle_history_visibility(self, history_id: str, visible: bool) -> bool:
         """Toggle the visibility of a history record."""
         try:
+            self.logger.info(f"Starting toggle_history_visibility for {history_id} to {visible}")
+            
             # First find the history record
             history_record = self.get_history_by_id(history_id)
             if not history_record:
+                self.logger.warning(f"History record {history_id} not found")
                 return False
+            
+            self.logger.info(f"Found history record: user_id={history_record.user_id}")
             
             # Update visibility
             history_table = self.table_service.get_table_client(self.history_table_name)
@@ -346,6 +351,8 @@ class HistoryStorage:
                 partition_key=history_record.user_id,
                 row_key=history_id
             )
+            self.logger.info(f"Retrieved entity, current visible={entity.get('visible')}")
+            
             entity["visible"] = visible
             history_table.update_entity(entity)
             
@@ -353,7 +360,7 @@ class HistoryStorage:
             return True
             
         except Exception as e:
-            self.logger.error(f"Failed to update history visibility: {str(e)}")
+            self.logger.error(f"Failed to update history visibility: {str(e)}", exc_info=True)
             return False
     
     def _get_transcriptions_for_history(self, history_id: str) -> List[Transcription]:
