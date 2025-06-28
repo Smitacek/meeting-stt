@@ -84,6 +84,8 @@ export default function App() {
   const [transcriptionMode, setTranscriptionMode] = useState<'record' | 'live'>('record');
   // Live session timing
   const [liveSessionStartTime, setLiveSessionStartTime] = useState<number | null>(null);
+  // Live session time limit (in minutes)
+  const [liveTimeLimit, setLiveTimeLimit] = useState<number>(60);
   
   // Reset state when transcription mode changes
   const handleTranscriptionModeChange = (mode: 'record' | 'live') => {
@@ -814,7 +816,35 @@ export default function App() {
                   <h2 className="text-lg font-semibold mb-4">Step 2. Live Recording</h2>
                 </CardHeader>
                 <CardContent>
+                  {/* Time limit settings */}
+                  <div className="mb-4 p-3 bg-muted/50 rounded-lg">
+                    <div className="flex items-center gap-4">
+                      <Label className="text-sm font-medium">Časový limit:</Label>
+                      <Select 
+                        value={liveTimeLimit.toString()} 
+                        onValueChange={(value) => setLiveTimeLimit(parseInt(value))}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="5">5 minut</SelectItem>
+                          <SelectItem value="15">15 minut</SelectItem>
+                          <SelectItem value="30">30 minut</SelectItem>
+                          <SelectItem value="60">60 minut</SelectItem>
+                          <SelectItem value="90">90 minut</SelectItem>
+                          <SelectItem value="120">120 minut</SelectItem>
+                          <SelectItem value="180">180 minut</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <span className="text-sm text-muted-foreground">
+                        Nahrávání bude automaticky ukončeno po dosažení limitu
+                      </span>
+                    </div>
+                  </div>
+                  
                   <LiveRecordingSDKDiarization 
+                    timeLimit={liveTimeLimit}
                     onTranscriptionStart={() => {
                       // Track session start time
                       setLiveSessionStartTime(Date.now());

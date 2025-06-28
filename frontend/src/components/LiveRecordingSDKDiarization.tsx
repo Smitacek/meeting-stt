@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Mic, MicOff, Loader2, AlertCircle, Users, Wifi } from 'lucide-react';
+import { Mic, Loader2, AlertCircle, Users, Wifi, Pause, Play, Clock, Square } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
 
@@ -19,6 +19,7 @@ interface LiveRecordingSDKProps {
   onTranscriptionStart?: () => void;
   onTranscriptionUpdate?: (results: TranscriptionResult[]) => void;
   onSessionEnd?: (fullTranscription: TranscriptionResult[]) => void;
+  timeLimit?: number; // Time limit in minutes, default 60
 }
 
 const BASE_URL = import.meta.env.VITE_BASE_URL || 'http://localhost:8000';
@@ -26,9 +27,11 @@ const BASE_URL = import.meta.env.VITE_BASE_URL || 'http://localhost:8000';
 export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
   onTranscriptionStart,
   onTranscriptionUpdate,
-  onSessionEnd
+  onSessionEnd,
+  timeLimit = 60 // Default 60 minutes
 }) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transcriptionResults, setTranscriptionResults] = useState<TranscriptionResult[]>([]);
@@ -36,8 +39,47 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
   const [serviceInfo, setServiceInfo] = useState<{token?: string, region?: string, azure_available?: boolean} | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   
+  // Session timing
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [pausedTime, setPausedTime] = useState<number>(0); // Total paused time in ms
+  const [lastPauseTime, setLastPauseTime] = useState<number | null>(null);
+  const [currentTime, setCurrentTime] = useState<number>(0); // Current elapsed time in seconds
+  
   const conversationRef = useRef<SpeechSDK.ConversationTranscriber | null>(null);
   const sessionIdRef = useRef<string>('');
+  const timeUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Utility functions for time management
+  const formatTime = useCallback((seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }, []);
+  
+  const getElapsedSeconds = useCallback(() => {
+    if (!sessionStartTime) return 0;
+    const now = Date.now();
+    const totalElapsed = now - sessionStartTime;
+    const actualElapsed = totalElapsed - pausedTime;
+    return Math.floor(actualElapsed / 1000);
+  }, [sessionStartTime, pausedTime]);
+  
+  const getRemainingSeconds = useCallback(() => {
+    const elapsed = getElapsedSeconds();
+    const limitSeconds = timeLimit * 60;
+    return Math.max(0, limitSeconds - elapsed);
+  }, [getElapsedSeconds, timeLimit]);
+  
+  const getProgressPercentage = useCallback(() => {
+    const elapsed = getElapsedSeconds();
+    const limitSeconds = timeLimit * 60;
+    return Math.min(100, (elapsed / limitSeconds) * 100);
+  }, [getElapsedSeconds, timeLimit]);
   
   // Color palette for speakers
   const colorPalette = [
@@ -61,6 +103,34 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
     }
     return speakerColors[speaker];
   }, [speakerColors]);
+  
+  // Timer management effect
+  useEffect(() => {
+    if (isRecording && !isPaused) {
+      // Update current time every second
+      timeUpdateIntervalRef.current = setInterval(() => {
+        const elapsed = getElapsedSeconds();
+        setCurrentTime(elapsed);
+        
+        // Check if we've reached the time limit
+        if (elapsed >= timeLimit * 60) {
+          console.log('Time limit reached, stopping recording');
+          handleStop();
+        }
+      }, 1000);
+    } else {
+      if (timeUpdateIntervalRef.current) {
+        clearInterval(timeUpdateIntervalRef.current);
+        timeUpdateIntervalRef.current = null;
+      }
+    }
+    
+    return () => {
+      if (timeUpdateIntervalRef.current) {
+        clearInterval(timeUpdateIntervalRef.current);
+      }
+    };
+  }, [isRecording, isPaused, getElapsedSeconds, timeLimit]);
   
   // Get Azure Speech token from backend
   const getAzureToken = useCallback(async () => {
@@ -185,6 +255,13 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
       setConnectionStatus('connecting');
       sessionIdRef.current = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
+      // Initialize session timing
+      setSessionStartTime(Date.now());
+      setPausedTime(0);
+      setLastPauseTime(null);
+      setCurrentTime(0);
+      setIsPaused(false);
+      
       console.log('Starting Azure Speech SDK recording with diarization...');
       
       // Get token from backend
@@ -261,6 +338,71 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
     console.log(`Azure Speech session ended. Total results: ${transcriptionResults.length}`);
   }, [transcriptionResults, onSessionEnd]);
   
+  // Pause recording
+  const pauseRecording = useCallback(() => {
+    console.log('Pausing Azure Speech recording...');
+    
+    if (conversationRef.current) {
+      conversationRef.current.stopTranscribingAsync(
+        () => {
+          console.log('Azure Speech transcription paused');
+          setIsPaused(true);
+          
+          // Track pause time
+          setLastPauseTime(Date.now());
+        },
+        (err) => {
+          console.error('Error pausing transcription:', err);
+          setError('Nepodařilo se pozastavit nahrávání');
+        }
+      );
+    }
+  }, []);
+  
+  // Resume recording  
+  const resumeRecording = useCallback(async () => {
+    console.log('Resuming Azure Speech recording...');
+    
+    if (!serviceInfo) {
+      setError('Chybí informace o službě');
+      return;
+    }
+    
+    try {
+      // Calculate accumulated pause time
+      if (lastPauseTime) {
+        const pauseDuration = Date.now() - lastPauseTime;
+        setPausedTime(prev => prev + pauseDuration);
+        setLastPauseTime(null);
+      }
+      
+      // Restart Azure Speech SDK
+      await setupAzureSpeech(serviceInfo);
+      
+      if (conversationRef.current) {
+        conversationRef.current.startTranscribingAsync(
+          () => {
+            console.log('Azure Speech transcription resumed');
+            setIsPaused(false);
+            setConnectionStatus('connected');
+          },
+          (err) => {
+            console.error('Error resuming transcription:', err);
+            setError('Nepodařilo se obnovit nahrávání');
+          }
+        );
+      }
+    } catch (err) {
+      console.error('Failed to resume recording:', err);
+      setError('Nepodařilo se obnovit nahrávání');
+    }
+  }, [serviceInfo, setupAzureSpeech, lastPauseTime]);
+  
+  // Stop recording (wrapper for compatibility)
+  const handleStop = useCallback(() => {
+    stopRecording();
+  }, [stopRecording]);
+  
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -303,14 +445,36 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
               )}
             </Button>
           ) : (
-            <Button 
-              onClick={stopRecording} 
-              variant="destructive"
-              className="gap-2"
-            >
-              <MicOff className="h-4 w-4" />
-              Zastavit nahrávání
-            </Button>
+            <div className="flex items-center gap-2">
+              {!isPaused ? (
+                <Button 
+                  onClick={pauseRecording} 
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <Pause className="h-4 w-4" />
+                  Pozastavit
+                </Button>
+              ) : (
+                <Button 
+                  onClick={resumeRecording} 
+                  variant="default"
+                  className="gap-2"
+                >
+                  <Play className="h-4 w-4" />
+                  Pokračovat
+                </Button>
+              )}
+              
+              <Button 
+                onClick={stopRecording} 
+                variant="destructive"
+                className="gap-2"
+              >
+                <Square className="h-4 w-4" />
+                Zastavit
+              </Button>
+            </div>
           )}
           
           {/* Connection status */}
@@ -335,6 +499,48 @@ export const LiveRecordingSDKDiarization: React.FC<LiveRecordingSDKProps> = ({
             </span>
           )}
         </div>
+        
+        {/* Session progress and time limit */}
+        {isRecording && (
+          <div className="space-y-3 p-4 bg-muted/50 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">
+                  {formatTime(currentTime)} / {formatTime(timeLimit * 60)}
+                </span>
+                {isPaused && (
+                  <Badge variant="secondary" className="ml-2">
+                    Pozastaveno
+                  </Badge>
+                )}
+              </div>
+              <span className="text-sm text-muted-foreground">
+                Zbývá: {formatTime(getRemainingSeconds())}
+              </span>
+            </div>
+            
+            {/* Progress bar */}
+            <div className="w-full bg-muted rounded-full h-2">
+              <div 
+                className={`h-2 rounded-full transition-all duration-1000 ${
+                  getProgressPercentage() > 90 ? 'bg-red-500' : 
+                  getProgressPercentage() > 75 ? 'bg-yellow-500' : 
+                  'bg-blue-500'
+                }`}
+                style={{ width: `${getProgressPercentage()}%` }}
+              />
+            </div>
+            
+            {/* Warning when approaching limit */}
+            {getProgressPercentage() > 90 && (
+              <div className="flex items-center gap-2 text-red-600 text-sm">
+                <AlertCircle className="h-4 w-4" />
+                <span>Blíží se časový limit! Session bude automaticky ukončena.</span>
+              </div>
+            )}
+          </div>
+        )}
         
         {/* Error display */}
         {error && (

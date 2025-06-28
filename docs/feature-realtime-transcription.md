@@ -201,30 +201,47 @@ Rozšíření aplikace o real-time funktionalitu zvyšuje hodnotu produktu a umo
 
 ## 🚀 DOPORUČENÁ ROZŠÍŘENÍ (Budoucí verze)
 
-### **Priorita 1 - Vysoká (Next Sprint)**
+### **Priorita 1 - Vysoká (Current Sprint) 🔄 IN PROGRESS**
 
-1. **History Integration** 
-   - Automatické ukládání live sessions do History API
-   - Možnost pojmenování live session před započetím
-   - Integrace s existující historie struktura
-   - Metadata: datum, délka session, počet mluvčích
+1. **✅ History Integration** - COMPLETED
+   - ✅ Automatické ukládání live sessions do History API
+   - ✅ Integrace s existující historie struktura (Azure Storage Tables)
+   - ✅ Metadata: datum, délka session, počet mluvčích
+   - ✅ Perzistentní úložiště místo in-memory storage
 
-2. **Export Functions**
-   - Download live transcription jako .txt soubor
-   - Export s timestamps a speaker labels
-   - Kompatibilita s existující export funkcionalitou
+2. **✅ Export Functions** - COMPLETED
+   - ✅ Download live transcription jako .txt soubor
+   - ✅ Export s timestamps a speaker labels
+   - ✅ Kompatibilita s existující export funkcionalitou
 
-3. **Enhanced Error Handling**
+3. **🔄 Advanced Session Controls** - IN PROGRESS
+   - **🚀 Pause/Resume funkcionalita** během live nahrávání
+     - Pozastavení a obnovení Azure Speech SDK recognition
+     - Seamless session continuity při resume
+     - Real-time UI feedback pro pause/resume stavy
+   - **⏰ Time Limit Management**
+     - Konfigurovatelný session time limit (default: 60 minut)
+     - Range: 5-180 minut s uživatelským nastavením
+     - Automatické ukončení session při dosažení limitu
+     - Auto-save při timeout nebo manual stop
+   - **📊 Session Progress Tracking**
+     - Real-time elapsed time zobrazení
+     - Progress bar s time limit visualization
+     - Remaining time countdown
+     - Visual warnings při blížícím se limitu
+
+### **Priorita 2 - Střední (Next Versions)**
+
+4. **Enhanced Error Handling**
    - Better microphone permission handling
    - Audio device selection (multiple mikrofony)
    - Fallback při selhání Azure Speech Service
+   - Network reconnection handling
 
-### **Priorita 2 - Střední (Future Versions)**
-
-4. **Advanced Controls**
-   - Pause/Resume funkcionalita během nahrávání
+5. **Real-time Session Management**
    - Real-time editace jmen mluvčích během session
-   - Možnost označení klíčových momentů
+   - Možnost označení klíčových momentů (bookmarks)
+   - Session notes a annotations
 
 5. **Visual Enhancements**
    - Audio level meter pro monitoring input úrovně
