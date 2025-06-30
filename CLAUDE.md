@@ -145,10 +145,11 @@ GET  /live/status         # Live transcription service status
 
 ## History Management
 
-The application tracks transcription history using in-memory data structures:
+The application tracks transcription history using Azure Storage Tables with in-memory fallback:
 - `History` class: Contains session metadata and list of transcriptions
-- `Transcription` class: Individual file transcription with metadata
-- Storage: Currently in memory only (`app.state.history`), no persistent database
+- `Transcription` class: Individual file transcription with metadata  
+- **Storage**: Azure Storage Tables (persistent) with automatic fallback to in-memory storage
+- **Persistence**: Data survives Container Apps restarts and supports multiple replicas
 - Frontend: History page displays past transcriptions with detail modal
 
 ## Environment Variables
@@ -156,6 +157,9 @@ The application tracks transcription history using in-memory data structures:
 ### Backend
 - `AZURE_SPEECH_KEY`: Azure Speech Service key
 - `AZURE_SPEECH_ENDPOINT`: Azure Speech Service endpoint
+- `AZURE_STORAGE_ACCOUNT_NAME`: Storage account name for Azure Tables
+- `AZURE_STORAGE_ACCOUNT_KEY`: Storage account key for Azure Tables
+- `AZURE_STORAGE_ACCOUNT_ENDPOINT`: Storage account endpoint
 - Additional Azure service credentials via DefaultAzureCredential
 
 ### Frontend
@@ -164,8 +168,9 @@ The application tracks transcription history using in-memory data structures:
 
 ## Important Notes
 
-- The current implementation uses in-memory storage for history - data is lost on server restart
-- Authentication is simplified for demo purposes
+- **Azure Tables Storage**: Persistent history storage with automatic table creation
+- **In-memory Fallback**: Graceful fallback when Azure Tables unavailable
+- Authentication is simplified with basic user_id/session_id tracking (no Azure AD)
 - Audio files are processed through Azure Speech Service with optional diarization
 - Live transcription requires FFmpeg for audio conversion (WebM/Opus → WAV)
 - Fallback to mock transcription when Azure Speech Service unavailable
