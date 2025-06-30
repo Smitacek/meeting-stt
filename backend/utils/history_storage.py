@@ -212,6 +212,51 @@ class HistoryStorage:
             self.logger.error(f"Failed to add transcription to history: {str(e)}")
             return False
     
+    def update_transcription(self, history_id: str, transcription: Transcription) -> bool:
+        """Update an existing transcription with new data (status, transcript_chunks, etc)."""
+        try:
+            if not self.use_azure_tables:
+                # In-memory fallback - transcription should already be updated by reference
+                self.logger.info(f"Updated transcription in memory for history {history_id}")
+                return True
+            
+            # Find the transcription entity in Azure Tables
+            transcription_table = self.table_service.get_table_client(self.transcription_table_name)
+            
+            # Query for transcription by history_id and file_name
+            filter_query = f"PartitionKey eq '{history_id}' and file_name eq '{transcription.file_name}'"
+            entities = list(transcription_table.query_entities(filter_query))
+            
+            if not entities:
+                self.logger.error(f"Transcription not found for update: history_id={history_id}, file_name={transcription.file_name}")
+                return False
+            
+            # Update the first matching entity
+            entity = entities[0]
+            entity["status"] = transcription.status
+            entity["transcript_chunks"] = json.dumps([{
+                "event_type": chunk.event_type,
+                "session": chunk.session,
+                "offset": chunk.offset,
+                "duration": chunk.duration,
+                "text": chunk.text,
+                "speaker_id": chunk.speaker_id,
+                "result_id": chunk.result_id,
+                "filename": chunk.filename,
+                "language": chunk.language
+            } for chunk in transcription.transcript_chunks])
+            entity["timestamp"] = transcription.timestamp.isoformat() if transcription.timestamp else None
+            
+            # Update in Azure Tables
+            transcription_table.update_entity(entity)
+            
+            self.logger.info(f"Updated transcription in Azure Tables: history_id={history_id}, status={transcription.status}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update transcription: {str(e)}")
+            return False
+    
     def get_history_by_id(self, history_id: str) -> Optional[History]:
         """Get a history record by ID."""
         try:

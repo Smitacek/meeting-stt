@@ -10,21 +10,21 @@
 - **Řešení**: Přidání `update_transcription()` metody a volání po dokončení transcription threadu
 - **Dopad**: Zabrání ztrátě dat - transcriptions se dokončí ale zůstávají v 'pending' statusu
 - **Soubory**: `backend/main.py`, `backend/utils/history_storage.py`
-- **Status**: ⏳ Čeká na implementaci
+- **Status**: ✅ Implementováno (commit 1e8810d+)
 
 #### 2. **FastAPI Routing Fix** (Commit: `5d7d04f`) 
 - **Problém**: Route order konflikt způsobující občasné 404 chyby na `/history` endpoint
 - **Řešení**: Přesunout `/history` endpoint PŘED `/history/{history_id}` v route definicích
 - **Dopad**: Řeší FastAPI routing konflikty kde specific routes musí být před generic
 - **Soubory**: `backend/main.py`
-- **Status**: ⏳ Čeká na implementaci
+- **Status**: ✅ Již implementováno (správné pořadí routes v aktuální verzi)
 
 #### 3. **Azure Tables Authentication Fix** (Commit: `843af48`)
 - **Problém**: 'Unsupported credential' chyba při používání Azure Tables
 - **Řešení**: Použít `AzureNamedKeyCredential` místo raw string pro authentication
 - **Dopad**: Umožňuje správnou Azure Tables autentizaci pro persistentní storage
 - **Soubory**: `backend/utils/history_storage.py`
-- **Status**: ⏳ Čeká na implementaci
+- **Status**: ✅ Implementováno (commit 1e8810d)
 
 ### 🟡 **MEDIUM PRIORITY - Vylepšení a diagnostika**
 

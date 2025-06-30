@@ -125,6 +125,11 @@ def get_history_by_id(history_id: str) -> History:
                     return history_record
         return None
 
+def update_transcription_in_history(history_id: str, transcription: Transcription) -> bool:
+    """Update an existing transcription in the history record."""
+    storage = get_history_storage()
+    return storage.update_transcription(history_id, transcription)
+
 def get_user_history(user_id: str, visible_only: bool = True) -> List[History]:
     """Get all history records for a specific user."""
     try:
@@ -514,6 +519,14 @@ async def submit_transcription(
                     logger.info("event_stream: Ending stream on session_stopped or closing event.")
                     break
             t.join()
+            
+            # Update transcription in history after completion
+            if history_record and transcription_record:
+                success = update_transcription_in_history(history_record.id, transcription_record)
+                if success:
+                    logger.info(f"Updated transcription in history record: {history_record.id}")
+                else:
+                    logger.warning(f"Failed to update transcription in history record: {history_record.id}")
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
