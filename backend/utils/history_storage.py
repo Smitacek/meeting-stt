@@ -11,7 +11,7 @@ from datetime import datetime
 from azure.data.tables import TableServiceClient, TableEntity
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError
-from azure.data.tables import AzureNamedKeyCredential
+from azure.core.credentials import AzureNamedKeyCredential
 
 from utils.states import History, Transcription, Transcript_chunk
 
