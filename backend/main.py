@@ -764,7 +764,8 @@ async def debug_test_storage():
         retrieved = get_history_by_id(history_record.id)
         
         # Test listing
-        all_histories = get_all_history(visible_only=False, limit=5)
+        storage = get_history_storage()
+        all_histories = storage.get_all_history(visible_only=False, limit=5)
         
         return {
             "test_result": "success",

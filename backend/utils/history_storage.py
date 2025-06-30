@@ -11,6 +11,7 @@ from datetime import datetime
 from azure.data.tables import TableServiceClient, TableEntity
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError
+from azure.data.tables import AzureNamedKeyCredential
 
 from utils.states import History, Transcription, Transcript_chunk
 
@@ -43,13 +44,14 @@ class HistoryStorage:
         try:
             # Try different authentication methods
             if storage_account_key:
-                # Use account key authentication
+                # Use account key authentication with AzureNamedKeyCredential
                 account_url = f"https://{storage_account_name}.table.core.windows.net/"
+                credential = AzureNamedKeyCredential(storage_account_name, storage_account_key)
                 self.table_service = TableServiceClient(
                     endpoint=account_url,
-                    credential=storage_account_key
+                    credential=credential
                 )
-                self.logger.info("Using storage account key authentication")
+                self.logger.info("Using AzureNamedKeyCredential authentication")
             else:
                 # Fallback to DefaultAzureCredential
                 account_url = f"https://{storage_account_name}.table.core.windows.net/"
