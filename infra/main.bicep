@@ -44,6 +44,12 @@ param srcDefinition object = {
 @description('Id of the user or app to assign application roles')
 param principalId string
 
+@description('Prefix for OpenAI custom subdomain names')
+param openaiPrefix string = 'meetingstt'
+
+@description('Location for Static Web Apps')
+param frontendLocation string = 'westeurope'
+
 // Tags that should be applied to all resources.
 // 
 // Note that 'azd-service-name' tags should be applied separately to service host resources.
@@ -55,8 +61,8 @@ var tags = {
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
-// New variable for prefix used in customSubDomainName
-var prefix = 'dreamv2'
+// Use parameterized prefix instead of hardcoded value
+var prefix = '${openaiPrefix}-${resourceToken}'
 
 resource rg 'Microsoft.Resources/resourceGroups@2022-09-01' = {
   name: 'rg-${environmentName}'
@@ -169,7 +175,7 @@ module frontend './app/frontend.bicep' = {
   name: 'frontend'
   params: {
     name: '${abbrs.webStaticSites}${resourceToken}'
-    location: 'westeurope'
+    location: frontendLocation
     tags: tags
     repositoryUrl: srcDefinition.repositoryUrl
     branch: srcDefinition.branch
