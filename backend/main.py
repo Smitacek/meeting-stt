@@ -713,6 +713,76 @@ async def get_session_history_endpoint(
         logger.error(f"Error retrieving session history: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve session history")
 
+@app.get("/debug/storage-status")
+async def debug_storage_status():
+    """Debug endpoint to check storage configuration and status."""
+    logger = logging.getLogger("debug_storage_status")
+    
+    try:
+        storage = get_history_storage()
+        
+        # Check environment variables
+        storage_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+        storage_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "***hidden***" if os.getenv("AZURE_STORAGE_ACCOUNT_KEY") else None)
+        storage_endpoint = os.getenv("AZURE_STORAGE_ACCOUNT_ENDPOINT")
+        
+        return {
+            "storage_mode": "azure_tables" if storage.use_azure_tables else "in_memory",
+            "azure_storage_account_name": storage_name,
+            "azure_storage_account_key_present": bool(os.getenv("AZURE_STORAGE_ACCOUNT_KEY")),
+            "azure_storage_account_endpoint": storage_endpoint,
+            "table_names": {
+                "history": getattr(storage, 'history_table_name', None),
+                "transcriptions": getattr(storage, 'transcription_table_name', None)
+            } if storage.use_azure_tables else None,
+            "memory_stats": {
+                "history_count": len(getattr(storage, 'memory_history', {})),
+                "transcription_count": len(getattr(storage, 'memory_transcriptions', {}))
+            } if not storage.use_azure_tables else None
+        }
+    except Exception as e:
+        logger.error(f"Error checking storage status: {str(e)}")
+        return {
+            "error": str(e),
+            "storage_mode": "unknown"
+        }
+
+@app.post("/debug/test-storage")
+async def debug_test_storage():
+    """Test storage by creating a dummy history record."""
+    logger = logging.getLogger("debug_test_storage")
+    
+    try:
+        # Test creating a history record
+        test_user_id = "test_user_" + str(int(time.time()))
+        test_session_id = "test_session_" + str(int(time.time()))
+        
+        logger.info(f"Creating test history record for user: {test_user_id}")
+        history_record = add_history_record(test_user_id, test_session_id, "test")
+        
+        # Test retrieving it
+        retrieved = get_history_by_id(history_record.id)
+        
+        # Test listing
+        all_histories = get_all_history(visible_only=False, limit=5)
+        
+        return {
+            "test_result": "success",
+            "created_history": {
+                "id": history_record.id,
+                "user_id": history_record.user_id,
+                "session_id": history_record.session_id
+            },
+            "retrieved_successfully": retrieved is not None,
+            "total_histories": len(all_histories)
+        }
+    except Exception as e:
+        logger.error(f"Storage test failed: {str(e)}")
+        return {
+            "test_result": "failed",
+            "error": str(e)
+        }
+
 @app.get("/history/{history_id}")
 async def get_history_record(history_id: str):
     """Get a specific history record by ID."""

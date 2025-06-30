@@ -28,15 +28,16 @@ class HistoryStorage:
         # Get storage account credentials from environment
         storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
         storage_account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
-        storage_endpoint = os.getenv("AZURE_STORAGE_ACCOUNT_ENDPOINT")
         
-        if not all([storage_account_name, storage_account_key, storage_endpoint]):
-            self.logger.warning("Missing Azure Storage credentials, will use fallback in-memory storage")
+        # Only require name and key - we'll construct the table endpoint ourselves
+        if not all([storage_account_name, storage_account_key]):
+            self.logger.warning("Missing Azure Storage credentials (name/key), will use fallback in-memory storage")
             self.use_azure_tables = False
             self._init_in_memory_storage()
             return
         
         self.use_azure_tables = True
+        self.logger.info(f"Initializing Azure Tables storage for account: {storage_account_name}")
         
         # Initialize Table Service Client
         try:
