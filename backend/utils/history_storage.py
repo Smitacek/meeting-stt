@@ -300,15 +300,62 @@ class HistoryStorage:
             self.logger.error(f"Failed to update transcription: {str(e)}")
             return False
     
-    def get_history_by_id(self, history_id: str) -> Optional[History]:
-        """Get a history record by ID."""
+    def get_history_by_user_and_id(self, user_id: str, history_id: str) -> Optional[History]:
+        """Get a history record by user_id and history_id (efficient direct lookup)."""
         try:
-            # Query across all partitions to find the history record
+            if not self.use_azure_tables:
+                # In-memory storage
+                return self.memory_history.get(history_id)
+            
+            # Azure Tables - efficient direct lookup with known partition key
+            history_table = self.table_service.get_table_client(self.history_table_name)
+            
+            entity = history_table.get_entity(
+                partition_key=user_id,
+                row_key=history_id
+            )
+            
+            # Get associated transcriptions
+            transcriptions = self._get_transcriptions_for_history(history_id)
+            
+            # Convert back to History object
+            history_record = History(
+                id=entity["RowKey"],
+                user_id=entity["user_id"],
+                session_id=entity["session_id"],
+                type=entity["type"],
+                timestamp=entity["timestamp"],
+                visible=entity["visible"],
+                transcriptions=transcriptions
+            )
+            
+            return history_record
+            
+        except ResourceNotFoundError:
+            self.logger.warning(f"History record not found: user_id={user_id}, history_id={history_id}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Failed to get history record: {str(e)}")
+            return None
+
+    def get_history_by_id(self, history_id: str) -> Optional[History]:
+        """Get a history record by ID.
+        
+        NOTE: This requires a table scan since we don't know the partition key (user_id).
+        For better performance, use get_user_history() when you know the user_id.
+        """
+        try:
+            if not self.use_azure_tables:
+                # In-memory storage
+                return self.memory_history.get(history_id)
+            
+            # Azure Tables - unfortunately requires table scan since we don't know user_id
             history_table = self.table_service.get_table_client(self.history_table_name)
             filter_query = f"RowKey eq '{history_id}'"
             
             entities = list(history_table.query_entities(filter_query))
             if not entities:
+                self.logger.warning(f"History record not found: {history_id}")
                 return None
             
             entity = entities[0]
@@ -476,21 +523,18 @@ class HistoryStorage:
                     return False
             
             # Azure Tables implementation
-            # First find the history record
+            # We need user_id for efficient lookup, so we have to do a table scan first
             history_record = self.get_history_by_id(history_id)
             if not history_record:
-                self.logger.warning(f"History record {history_id} not found")
+                self.logger.error(f"History record {history_id} not found")
                 return False
             
-            self.logger.info(f"Found history record: user_id={history_record.user_id}")
-            
-            # Update visibility
+            # Now we can do efficient direct update with known partition key
             history_table = self.table_service.get_table_client(self.history_table_name)
             entity = history_table.get_entity(
                 partition_key=history_record.user_id,
                 row_key=history_id
             )
-            self.logger.info(f"Retrieved entity, current visible={entity.get('visible')}")
             
             entity["visible"] = visible
             history_table.update_entity(entity)
