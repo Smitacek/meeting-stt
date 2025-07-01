@@ -1575,12 +1575,25 @@ async def test_concurrency_fix():
         update_results.append({"update": "second_chunk", "success": result2})
         logger.info(f"Update 2 result: {result2}")
         
-        # Update 3: Complete transcription
+        # Update 3: Complete transcription with third chunk
+        transcription.transcript_chunks.append(
+            Transcript_chunk(
+                event_type="transcribed",
+                session=test_session_id,
+                offset=4000,
+                duration=1500,
+                text="Třetí závěrečná část přepisu.",
+                speaker_id="Speaker_1",
+                result_id="result_003",
+                filename="test_concurrent.wav",
+                language="cs"
+            )
+        )
         transcription.status = "completed"
         transcription.analysis = "Test analysis result"
         
         result3 = update_transcription_in_history(history_record.id, transcription)
-        update_results.append({"update": "completion", "success": result3})
+        update_results.append({"update": "completion_with_chunk", "success": result3})
         logger.info(f"Update 3 result: {result3}")
         
         # Verify final state
@@ -1607,7 +1620,7 @@ async def test_concurrency_fix():
                 "total_updates": len(update_results),
                 "successful_updates": sum(1 for r in update_results if r["success"]),
                 "all_successful": all_updates_successful,
-                "fix_working": all_updates_successful and final_verification["final_chunks_count"] == 2
+                "fix_working": all_updates_successful and final_verification["final_chunks_count"] == 3
             },
             "message": "ETag concurrency fix working!" if all_updates_successful else "Some updates failed - check logs"
         }
