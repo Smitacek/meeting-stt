@@ -129,11 +129,11 @@ class HistoryStorage:
             return history_record
         
         # Azure Tables implementation
-        # Convert to table entity
+        # Use history_id as PartitionKey for efficient direct operations
         entity = {
-            "PartitionKey": user_id,  # Partition by user for efficient queries
-            "RowKey": history_id,
-            "user_id": user_id,
+            "PartitionKey": history_id,  # Primary key for operations
+            "RowKey": "main",  # Constant row key
+            "user_id": user_id,  # Field for filtering only
             "session_id": session_id,
             "type": history_type,
             "timestamp": timestamp,
@@ -225,8 +225,8 @@ class HistoryStorage:
             # Update history record transcription count
             history_table = self.table_service.get_table_client(self.history_table_name)
             history_entity = history_table.get_entity(
-                partition_key=history_record.user_id,
-                row_key=history_id
+                partition_key=history_id,
+                row_key="main"
             )
             history_entity["transcription_count"] = history_entity.get("transcription_count", 0) + 1
             history_table.update_entity(history_entity)
@@ -300,19 +300,20 @@ class HistoryStorage:
             self.logger.error(f"Failed to update transcription: {str(e)}")
             return False
     
-    def get_history_by_user_and_id(self, user_id: str, history_id: str) -> Optional[History]:
-        """Get a history record by user_id and history_id (efficient direct lookup)."""
+
+    def get_history_by_id(self, history_id: str) -> Optional[History]:
+        """Get a history record by ID (efficient direct lookup)."""
         try:
             if not self.use_azure_tables:
                 # In-memory storage
                 return self.memory_history.get(history_id)
             
-            # Azure Tables - efficient direct lookup with known partition key
+            # Azure Tables - direct lookup using history_id as partition key
             history_table = self.table_service.get_table_client(self.history_table_name)
             
             entity = history_table.get_entity(
-                partition_key=user_id,
-                row_key=history_id
+                partition_key=history_id,
+                row_key="main"
             )
             
             # Get associated transcriptions
@@ -320,7 +321,7 @@ class HistoryStorage:
             
             # Convert back to History object
             history_record = History(
-                id=entity["RowKey"],
+                id=history_id,  # Use the history_id directly
                 user_id=entity["user_id"],
                 session_id=entity["session_id"],
                 type=entity["type"],
@@ -332,50 +333,8 @@ class HistoryStorage:
             return history_record
             
         except ResourceNotFoundError:
-            self.logger.warning(f"History record not found: user_id={user_id}, history_id={history_id}")
+            self.logger.warning(f"History record not found: {history_id}")
             return None
-        except Exception as e:
-            self.logger.error(f"Failed to get history record: {str(e)}")
-            return None
-
-    def get_history_by_id(self, history_id: str) -> Optional[History]:
-        """Get a history record by ID.
-        
-        NOTE: This requires a table scan since we don't know the partition key (user_id).
-        For better performance, use get_user_history() when you know the user_id.
-        """
-        try:
-            if not self.use_azure_tables:
-                # In-memory storage
-                return self.memory_history.get(history_id)
-            
-            # Azure Tables - unfortunately requires table scan since we don't know user_id
-            history_table = self.table_service.get_table_client(self.history_table_name)
-            filter_query = f"RowKey eq '{history_id}'"
-            
-            entities = list(history_table.query_entities(filter_query))
-            if not entities:
-                self.logger.warning(f"History record not found: {history_id}")
-                return None
-            
-            entity = entities[0]
-            
-            # Get associated transcriptions
-            transcriptions = self._get_transcriptions_for_history(history_id)
-            
-            # Convert back to History object
-            history_record = History(
-                id=entity["RowKey"],
-                user_id=entity["user_id"],
-                session_id=entity["session_id"],
-                type=entity["type"],
-                timestamp=entity["timestamp"],
-                visible=entity["visible"],
-                transcriptions=transcriptions
-            )
-            
-            return history_record
-            
         except Exception as e:
             self.logger.error(f"Failed to get history record {history_id}: {str(e)}")
             return None
@@ -414,7 +373,7 @@ class HistoryStorage:
             histories = []
             for entity in entities:
                 history_record = History(
-                    id=entity["RowKey"],
+                    id=entity["PartitionKey"],  # history_id is now the PartitionKey
                     user_id=entity["user_id"],
                     session_id=entity["session_id"],
                     type=entity["type"],
@@ -434,10 +393,17 @@ class HistoryStorage:
     def get_user_history(self, user_id: str, visible_only: bool = True) -> List[History]:
         """Get all history records for a specific user."""
         try:
+            if not self.use_azure_tables:
+                # In-memory storage
+                histories = [h for h in self.memory_history.values() if h.user_id == user_id]
+                if visible_only:
+                    histories = [h for h in histories if h.visible]
+                return histories
+            
             history_table = self.table_service.get_table_client(self.history_table_name)
             
-            # Query by partition key (user_id)
-            filter_parts = [f"PartitionKey eq '{user_id}'"]
+            # Query by user_id field (requires table scan)
+            filter_parts = [f"user_id eq '{user_id}'"]
             if visible_only:
                 filter_parts.append("visible eq true")
             
@@ -449,10 +415,10 @@ class HistoryStorage:
             histories = []
             for entity in entities:
                 # Get transcriptions for this history
-                transcriptions = self._get_transcriptions_for_history(entity["RowKey"])
+                transcriptions = self._get_transcriptions_for_history(entity["PartitionKey"])
                 
                 history_record = History(
-                    id=entity["RowKey"],
+                    id=entity["PartitionKey"],  # history_id is now the PartitionKey
                     user_id=entity["user_id"],
                     session_id=entity["session_id"],
                     type=entity["type"],
@@ -472,9 +438,16 @@ class HistoryStorage:
     def get_session_history(self, session_id: str, visible_only: bool = True) -> List[History]:
         """Get all history records for a specific session."""
         try:
+            if not self.use_azure_tables:
+                # In-memory storage
+                histories = [h for h in self.memory_history.values() if h.session_id == session_id]
+                if visible_only:
+                    histories = [h for h in histories if h.visible]
+                return histories
+            
             history_table = self.table_service.get_table_client(self.history_table_name)
             
-            # Query by session_id
+            # Query by session_id field (requires table scan)
             filter_parts = [f"session_id eq '{session_id}'"]
             if visible_only:
                 filter_parts.append("visible eq true")
@@ -487,10 +460,10 @@ class HistoryStorage:
             histories = []
             for entity in entities:
                 # Get transcriptions for this history
-                transcriptions = self._get_transcriptions_for_history(entity["RowKey"])
+                transcriptions = self._get_transcriptions_for_history(entity["PartitionKey"])
                 
                 history_record = History(
-                    id=entity["RowKey"],
+                    id=entity["PartitionKey"],  # history_id is now the PartitionKey
                     user_id=entity["user_id"],
                     session_id=entity["session_id"],
                     type=entity["type"],
@@ -522,18 +495,12 @@ class HistoryStorage:
                     self.logger.warning(f"History record {history_id} not found in memory")
                     return False
             
-            # Azure Tables implementation
-            # We need user_id for efficient lookup, so we have to do a table scan first
-            history_record = self.get_history_by_id(history_id)
-            if not history_record:
-                self.logger.error(f"History record {history_id} not found")
-                return False
-            
-            # Now we can do efficient direct update with known partition key
+            # Azure Tables implementation - direct lookup and update
             history_table = self.table_service.get_table_client(self.history_table_name)
+            
             entity = history_table.get_entity(
-                partition_key=history_record.user_id,
-                row_key=history_id
+                partition_key=history_id,
+                row_key="main"
             )
             
             entity["visible"] = visible
