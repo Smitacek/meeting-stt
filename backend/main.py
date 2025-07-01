@@ -522,22 +522,11 @@ async def submit_transcription(
             
             # Update transcription in history after completion
             if history_record and transcription_record:
-                # Small delay to ensure transcription is persisted to Azure Tables
-                import time
-                time.sleep(1)
-                
                 success = update_transcription_in_history(history_record.id, transcription_record)
                 if success:
                     logger.info(f"Updated transcription in history record: {history_record.id}")
                 else:
-                    logger.warning(f"Failed to update transcription in history record: {history_record.id}")
-                    # Retry once after additional delay
-                    time.sleep(2)
-                    success = update_transcription_in_history(history_record.id, transcription_record)
-                    if success:
-                        logger.info(f"Updated transcription in history record on retry: {history_record.id}")
-                    else:
-                        logger.error(f"Failed to update transcription in history after retry: {history_record.id}")
+                    logger.error(f"Failed to update transcription in history record: {history_record.id}")
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 

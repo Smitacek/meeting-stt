@@ -155,10 +155,10 @@ class HistoryStorage:
         """Add a transcription to an existing history record."""
         try:
             if not self.use_azure_tables:
-                # In-memory fallback
+                # In-memory storage
                 if history_id in self.memory_history:
-                    # Add transcription ID if missing
-                    if not hasattr(transcription, 'id') or not transcription.id:
+                    # Generate ID if missing
+                    if not transcription.id:
                         import uuid
                         transcription.id = str(uuid.uuid4())
                     
@@ -241,55 +241,38 @@ class HistoryStorage:
     def update_transcription(self, history_id: str, transcription: Transcription) -> bool:
         """Update an existing transcription with new data (status, transcript_chunks, etc)."""
         try:
+            # Validate required fields
+            if not transcription.id:
+                self.logger.error(f"Transcription ID is required for update operation. history_id={history_id}, file_name={transcription.file_name}")
+                return False
+            
             if not self.use_azure_tables:
-                # In-memory fallback - find and update transcription
+                # In-memory storage - find by ID only
                 if history_id in self.memory_history:
-                    # Try to find by ID first, then fall back to file_name
                     for t in self.memory_history[history_id].transcriptions:
-                        if (hasattr(transcription, 'id') and transcription.id and t.id == transcription.id) or \
-                           (t.file_name == transcription.file_name):
+                        if t.id == transcription.id:
                             # Update the transcription with new data
                             t.status = transcription.status
                             t.transcript_chunks = transcription.transcript_chunks
                             t.timestamp = transcription.timestamp
-                            self.logger.info(f"Updated transcription {t.id or t.file_name} in memory for history {history_id}")
+                            self.logger.info(f"Updated transcription {t.id} in memory for history {history_id}")
                             return True
-                    self.logger.warning(f"Transcription {transcription.id or transcription.file_name} not found in memory history {history_id}")
+                    self.logger.error(f"Transcription {transcription.id} not found in memory history {history_id}")
                     return False
                 else:
                     self.logger.error(f"History record not found in memory: {history_id}")
                     return False
             
-            # Azure Tables implementation
+            # Azure Tables implementation - direct lookup by ID
             transcription_table = self.table_service.get_table_client(self.transcription_table_name)
             
-            # If transcription has an ID, use direct lookup (most efficient)
-            if hasattr(transcription, 'id') and transcription.id:
-                try:
-                    entity = transcription_table.get_entity(
-                        partition_key=history_id,
-                        row_key=transcription.id
-                    )
-                    self.logger.info(f"Found transcription by ID: {transcription.id}")
-                except ResourceNotFoundError:
-                    self.logger.warning(f"Transcription not found by ID {transcription.id}, falling back to file_name search")
-                    entity = None
-            else:
-                entity = None
+            # Get entity by exact ID (PartitionKey=history_id, RowKey=transcription.id)
+            entity = transcription_table.get_entity(
+                partition_key=history_id,
+                row_key=transcription.id
+            )
             
-            # Fallback to file_name search if ID lookup failed or no ID
-            if not entity:
-                filter_query = f"PartitionKey eq '{history_id}' and file_name eq '{transcription.file_name}'"
-                entities = list(transcription_table.query_entities(filter_query))
-                
-                if not entities:
-                    self.logger.error(f"Transcription not found for update: history_id={history_id}, id={getattr(transcription, 'id', 'None')}, file_name={transcription.file_name}")
-                    return False
-                
-                entity = entities[0]
-                self.logger.info(f"Found transcription by file_name: {transcription.file_name}")
-            
-            # Update the entity
+            # Update the entity fields
             entity["status"] = transcription.status
             entity["transcript_chunks"] = json.dumps([{
                 "event_type": chunk.event_type,
@@ -307,9 +290,12 @@ class HistoryStorage:
             # Update in Azure Tables
             transcription_table.update_entity(entity)
             
-            self.logger.info(f"Updated transcription in Azure Tables: history_id={history_id}, id={entity['RowKey']}, status={transcription.status}")
+            self.logger.info(f"Updated transcription in Azure Tables: history_id={history_id}, id={transcription.id}, status={transcription.status}")
             return True
             
+        except ResourceNotFoundError:
+            self.logger.error(f"Transcription not found: history_id={history_id}, id={transcription.id}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to update transcription: {str(e)}")
             return False
