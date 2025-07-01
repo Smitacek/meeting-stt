@@ -760,6 +760,114 @@ async def debug_storage_status():
             "storage_mode": "unknown"
         }
 
+@app.post("/debug/clear-and-test")
+async def debug_clear_and_test():
+    """Clear database and create comprehensive test record."""
+    logger = logging.getLogger("debug_clear_and_test")
+    
+    try:
+        storage = get_history_storage()
+        
+        # Clear in-memory storage if applicable
+        if not storage.use_azure_tables:
+            storage.memory_history.clear()
+            storage.memory_transcriptions.clear()
+            logger.info("Cleared in-memory storage")
+        else:
+            # For Azure Tables, we would need to delete/recreate tables
+            # but that's complex, so we'll just create test data
+            logger.info("Azure Tables mode - creating test data")
+        
+        # Create comprehensive test history record
+        test_user_id = "user_test_123"
+        test_session_id = "session_test_456"
+        
+        logger.info(f"Creating history record for user: {test_user_id}")
+        history_record = add_history_record(test_user_id, test_session_id, "test")
+        
+        # Create test transcription with chunks
+        test_transcription = Transcription(
+            file_name="test_audio.wav",
+            file_name_original="test_audio.wav",
+            language="cs",
+            model="msft",
+            temperature=0.0,
+            diarization="false",
+            combine="true",
+            status="completed",
+            transcript_chunks=[
+                Transcript_chunk(
+                    event_type="transcribed",
+                    session="test_session",
+                    offset=0,
+                    duration=5000,
+                    text="Ahoj, toto je testovací přepis zvukového souboru.",
+                    speaker_id="Speaker_1",
+                    result_id="result_001",
+                    filename="test_audio.wav",
+                    language="cs"
+                ),
+                Transcript_chunk(
+                    event_type="transcribed",
+                    session="test_session",
+                    offset=5000,
+                    duration=4000,
+                    text="Druhá část testovacího přepisu s jiným mluvčím.",
+                    speaker_id="Speaker_2",
+                    result_id="result_002",
+                    filename="test_audio.wav",
+                    language="cs"
+                )
+            ]
+        )
+        
+        # Add transcription to history
+        logger.info("Adding transcription to history...")
+        add_success = add_transcription_to_history(history_record.id, test_transcription)
+        
+        # Test update operation
+        if add_success and test_transcription.id:
+            test_transcription.status = "analyzed"
+            test_transcription.analysis = "Test analysis results"
+            update_success = update_transcription_in_history(history_record.id, test_transcription)
+        else:
+            update_success = False
+        
+        # Test retrieval
+        retrieved = get_history_by_id(history_record.id)
+        
+        return {
+            "test_result": "success",
+            "storage_mode": "azure_tables" if storage.use_azure_tables else "in_memory",
+            "created_history": {
+                "id": history_record.id,
+                "user_id": history_record.user_id,
+                "session_id": history_record.session_id
+            },
+            "transcription": {
+                "id": test_transcription.id,
+                "file_name": test_transcription.file_name,
+                "status": test_transcription.status,
+                "chunks_count": len(test_transcription.transcript_chunks)
+            },
+            "operations": {
+                "add_transcription": add_success,
+                "update_transcription": update_success,
+                "retrieve_history": retrieved is not None
+            },
+            "retrieved_data": {
+                "transcriptions_count": len(retrieved.transcriptions) if retrieved else 0,
+                "first_transcription_chunks": len(retrieved.transcriptions[0].transcript_chunks) if retrieved and retrieved.transcriptions else 0
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Clear and test failed: {str(e)}")
+        return {
+            "test_result": "failed",
+            "error": str(e)
+        }
+
 @app.post("/debug/test-storage")
 async def debug_test_storage():
     """Test storage by creating a dummy history record."""
