@@ -41,6 +41,7 @@ class Transcript_chunk:
 
 @dataclass(kw_only=True)
 class Transcription:
+    id: Optional[str] = field(default=None)  # Add unique ID for Azure Tables
     file_name: str = field(default=None)  # Name of the transcribed file
     file_name_original: str = field(default=None)  # Original filename before processing
     transcript_chunks: List[Transcript_chunk] = field(default_factory=list)  # List of transcript chunks
