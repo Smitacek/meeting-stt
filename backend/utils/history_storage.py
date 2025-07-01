@@ -61,9 +61,8 @@ class HistoryStorage:
                 )
                 self.logger.info("Using DefaultAzureCredential authentication")
             
-            # Table names
-            self.history_table_name = "TranscriptionHistory"
-            self.transcription_table_name = "Transcriptions"
+            # Single table for all history data
+            self.table_name = "TranscriptionHistory"
             
             # Create tables if they don't exist
             self._ensure_tables_exist()
@@ -84,24 +83,16 @@ class HistoryStorage:
         self.logger.info("In-memory storage initialized")
     
     def _ensure_tables_exist(self):
-        """Create tables if they don't exist."""
+        """Create table if it doesn't exist."""
         try:
-            # Create History table
             try:
-                self.table_service.create_table(self.history_table_name)
-                self.logger.info(f"Created table: {self.history_table_name}")
+                self.table_service.create_table(self.table_name)
+                self.logger.info(f"Created table: {self.table_name}")
             except ResourceExistsError:
-                self.logger.debug(f"Table already exists: {self.history_table_name}")
-            
-            # Create Transcription table  
-            try:
-                self.table_service.create_table(self.transcription_table_name)
-                self.logger.info(f"Created table: {self.transcription_table_name}")
-            except ResourceExistsError:
-                self.logger.debug(f"Table already exists: {self.transcription_table_name}")
+                self.logger.debug(f"Table already exists: {self.table_name}")
                 
         except Exception as e:
-            self.logger.error(f"Failed to create tables: {str(e)}")
+            self.logger.error(f"Failed to create table: {str(e)}")
             raise
     
     def add_history_record(self, user_id: str, session_id: str, history_type: str = "transcription") -> History:
@@ -128,21 +119,22 @@ class HistoryStorage:
             self.logger.info(f"Added history record {history_id} to memory storage")
             return history_record
         
-        # Azure Tables implementation
-        # Use history_id as PartitionKey for efficient direct operations
+        # Azure Tables implementation - single table design
+        # PartitionKey = history_id, RowKey = "main" for metadata
         entity = {
-            "PartitionKey": history_id,  # Primary key for operations
-            "RowKey": "main",  # Constant row key
-            "user_id": user_id,  # Field for filtering only
+            "PartitionKey": history_id,
+            "RowKey": "main",  # Main record for history metadata
+            "entity_type": "history",  # Distinguish from transcriptions
+            "user_id": user_id,
             "session_id": session_id,
             "type": history_type,
             "timestamp": timestamp,
             "visible": True,
-            "transcription_count": 0  # Track number of transcriptions
+            "transcription_count": 0
         }
         
         try:
-            table_client = self.table_service.get_table_client(self.history_table_name)
+            table_client = self.table_service.get_table_client(self.table_name)
             table_client.create_entity(entity)
             self.logger.info(f"Created history record: {history_id}")
             return history_record
@@ -189,11 +181,12 @@ class HistoryStorage:
             # IMPORTANT: Store the ID in the transcription object
             transcription.id = transcription_id
             
-            # Convert Transcription to storage format
+            # Store transcription in same table as history
+            # PartitionKey = history_id, RowKey = transcription_id
             transcription_entity = {
-                "PartitionKey": history_id,  # Partition by history_id
+                "PartitionKey": history_id,
                 "RowKey": transcription_id,
-                "history_id": history_id,
+                "entity_type": "transcription",  # Distinguish from history metadata
                 "file_name": transcription.file_name,
                 "file_name_original": transcription.file_name_original,
                 "language": transcription.language,
@@ -218,18 +211,17 @@ class HistoryStorage:
                 } for chunk in transcription.transcript_chunks])
             }
             
-            # Store transcription
-            transcription_table = self.table_service.get_table_client(self.transcription_table_name)
-            transcription_table.create_entity(transcription_entity)
+            # Store transcription in single table
+            table_client = self.table_service.get_table_client(self.table_name)
+            table_client.create_entity(transcription_entity)
             
-            # Update history record transcription count
-            history_table = self.table_service.get_table_client(self.history_table_name)
-            history_entity = history_table.get_entity(
+            # Update history metadata - increment transcription count
+            history_entity = table_client.get_entity(
                 partition_key=history_id,
                 row_key="main"
             )
             history_entity["transcription_count"] = history_entity.get("transcription_count", 0) + 1
-            history_table.update_entity(history_entity)
+            table_client.update_entity(history_entity)
             
             self.logger.info(f"Added transcription {transcription_id} to history {history_id}")
             return True
@@ -263,11 +255,11 @@ class HistoryStorage:
                     self.logger.error(f"History record not found in memory: {history_id}")
                     return False
             
-            # Azure Tables implementation - direct lookup by ID
-            transcription_table = self.table_service.get_table_client(self.transcription_table_name)
+            # Azure Tables implementation - single table lookup
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            # Get entity by exact ID (PartitionKey=history_id, RowKey=transcription.id)
-            entity = transcription_table.get_entity(
+            # Get transcription entity (PartitionKey=history_id, RowKey=transcription.id)
+            entity = table_client.get_entity(
                 partition_key=history_id,
                 row_key=transcription.id
             )
@@ -287,8 +279,8 @@ class HistoryStorage:
             } for chunk in transcription.transcript_chunks])
             entity["timestamp"] = transcription.timestamp.isoformat() if transcription.timestamp else None
             
-            # Update in Azure Tables
-            transcription_table.update_entity(entity)
+            # Update in single table
+            table_client.update_entity(entity)
             
             self.logger.info(f"Updated transcription in Azure Tables: history_id={history_id}, id={transcription.id}, status={transcription.status}")
             return True
@@ -308,15 +300,16 @@ class HistoryStorage:
                 # In-memory storage
                 return self.memory_history.get(history_id)
             
-            # Azure Tables - direct lookup using history_id as partition key
-            history_table = self.table_service.get_table_client(self.history_table_name)
+            # Azure Tables - single table lookup
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            entity = history_table.get_entity(
+            # Get history metadata
+            entity = table_client.get_entity(
                 partition_key=history_id,
                 row_key="main"
             )
             
-            # Get associated transcriptions
+            # Get associated transcriptions from same table
             transcriptions = self._get_transcriptions_for_history(history_id)
             
             # Convert back to History object
@@ -349,18 +342,18 @@ class HistoryStorage:
                     histories = [h for h in histories if h.visible]
                 return histories[:limit]
             
-            # Azure Tables implementation
-            history_table = self.table_service.get_table_client(self.history_table_name)
+            # Azure Tables implementation - single table
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            # Build filter query
-            filter_parts = []
+            # Build filter query - only history metadata entities
+            filter_parts = ["entity_type eq 'history'"]
             if visible_only:
                 filter_parts.append("visible eq true")
             
-            filter_query = " and ".join(filter_parts) if filter_parts else None
+            filter_query = " and ".join(filter_parts)
             
             # Query entities with limit
-            entities = list(history_table.query_entities(
+            entities = list(table_client.query_entities(
                 filter_query, 
                 select=["PartitionKey", "RowKey", "user_id", "session_id", "type", "timestamp", "visible", "transcription_count"]
             ))
@@ -400,16 +393,16 @@ class HistoryStorage:
                     histories = [h for h in histories if h.visible]
                 return histories
             
-            history_table = self.table_service.get_table_client(self.history_table_name)
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            # Query by user_id field (requires table scan)
-            filter_parts = [f"user_id eq '{user_id}'"]
+            # Query by user_id field - only history metadata
+            filter_parts = ["entity_type eq 'history'", f"user_id eq '{user_id}'"]
             if visible_only:
                 filter_parts.append("visible eq true")
             
             filter_query = " and ".join(filter_parts)
             
-            entities = list(history_table.query_entities(filter_query))
+            entities = list(table_client.query_entities(filter_query))
             
             # Convert to History objects
             histories = []
@@ -445,16 +438,16 @@ class HistoryStorage:
                     histories = [h for h in histories if h.visible]
                 return histories
             
-            history_table = self.table_service.get_table_client(self.history_table_name)
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            # Query by session_id field (requires table scan)
-            filter_parts = [f"session_id eq '{session_id}'"]
+            # Query by session_id field - only history metadata
+            filter_parts = ["entity_type eq 'history'", f"session_id eq '{session_id}'"]
             if visible_only:
                 filter_parts.append("visible eq true")
             
             filter_query = " and ".join(filter_parts)
             
-            entities = list(history_table.query_entities(filter_query))
+            entities = list(table_client.query_entities(filter_query))
             
             # Convert to History objects
             histories = []
@@ -495,16 +488,16 @@ class HistoryStorage:
                     self.logger.warning(f"History record {history_id} not found in memory")
                     return False
             
-            # Azure Tables implementation - direct lookup and update
-            history_table = self.table_service.get_table_client(self.history_table_name)
+            # Azure Tables implementation - single table update
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            entity = history_table.get_entity(
+            entity = table_client.get_entity(
                 partition_key=history_id,
                 row_key="main"
             )
             
             entity["visible"] = visible
-            history_table.update_entity(entity)
+            table_client.update_entity(entity)
             
             self.logger.info(f"Updated history {history_id} visibility to {visible}")
             return True
@@ -516,11 +509,11 @@ class HistoryStorage:
     def _get_transcriptions_for_history(self, history_id: str) -> List[Transcription]:
         """Get all transcriptions for a specific history record."""
         try:
-            transcription_table = self.table_service.get_table_client(self.transcription_table_name)
+            table_client = self.table_service.get_table_client(self.table_name)
             
-            # Query by partition key (history_id)
-            filter_query = f"PartitionKey eq '{history_id}'"
-            entities = list(transcription_table.query_entities(filter_query))
+            # Query by partition key and entity type
+            filter_query = f"PartitionKey eq '{history_id}' and entity_type eq 'transcription'"
+            entities = list(table_client.query_entities(filter_query))
             
             transcriptions = []
             for entity in entities:
