@@ -213,6 +213,10 @@ class HistoryStorage:
             
             # Store transcription in single table
             table_client = self.table_service.get_table_client(self.table_name)
+            
+            self.logger.info(f"ADD_TRANSCRIPTION: Creating entity with PartitionKey={history_id}, RowKey={transcription_id}")
+            self.logger.info(f"ADD_TRANSCRIPTION: Initial status={transcription.status}, chunks={len(transcription.transcript_chunks)}")
+            
             table_client.create_entity(transcription_entity)
             
             # Update history metadata - increment transcription count
@@ -223,7 +227,7 @@ class HistoryStorage:
             history_entity["transcription_count"] = history_entity.get("transcription_count", 0) + 1
             table_client.update_entity(history_entity)
             
-            self.logger.info(f"Added transcription {transcription_id} to history {history_id}")
+            self.logger.info(f"ADD_TRANSCRIPTION: SUCCESS - Created transcription {transcription_id} with ID stored in object: {transcription.id}")
             return True
             
         except Exception as e:
@@ -233,9 +237,15 @@ class HistoryStorage:
     def update_transcription(self, history_id: str, transcription: Transcription) -> bool:
         """Update an existing transcription with new data (status, transcript_chunks, etc)."""
         try:
+            # Log update attempt details
+            self.logger.info(f"UPDATE_TRANSCRIPTION: Attempting update for history_id={history_id}")
+            self.logger.info(f"UPDATE_TRANSCRIPTION: transcription.id={transcription.id}")
+            self.logger.info(f"UPDATE_TRANSCRIPTION: transcription.status={transcription.status}")
+            self.logger.info(f"UPDATE_TRANSCRIPTION: transcript_chunks count={len(transcription.transcript_chunks)}")
+            
             # Validate required fields
             if not transcription.id:
-                self.logger.error(f"Transcription ID is required for update operation. history_id={history_id}, file_name={transcription.file_name}")
+                self.logger.error(f"UPDATE_TRANSCRIPTION: FAILED - Transcription ID is required. history_id={history_id}, file_name={transcription.file_name}")
                 return False
             
             if not self.use_azure_tables:
@@ -255,35 +265,8 @@ class HistoryStorage:
                     self.logger.error(f"History record not found in memory: {history_id}")
                     return False
             
-            # Azure Tables implementation - single table lookup
-            table_client = self.table_service.get_table_client(self.table_name)
-            
-            # Get transcription entity (PartitionKey=history_id, RowKey=transcription.id)
-            entity = table_client.get_entity(
-                partition_key=history_id,
-                row_key=transcription.id
-            )
-            
-            # Update the entity fields
-            entity["status"] = transcription.status
-            entity["transcript_chunks"] = json.dumps([{
-                "event_type": chunk.event_type,
-                "session": chunk.session,
-                "offset": chunk.offset,
-                "duration": chunk.duration,
-                "text": chunk.text,
-                "speaker_id": chunk.speaker_id,
-                "result_id": chunk.result_id,
-                "filename": chunk.filename,
-                "language": chunk.language
-            } for chunk in transcription.transcript_chunks])
-            entity["timestamp"] = transcription.timestamp.isoformat() if transcription.timestamp else None
-            
-            # Update in single table
-            table_client.update_entity(entity)
-            
-            self.logger.info(f"Updated transcription in Azure Tables: history_id={history_id}, id={transcription.id}, status={transcription.status}")
-            return True
+            # Azure Tables implementation with ETag retry pattern
+            return self._update_transcription_with_retry(history_id, transcription)
             
         except ResourceNotFoundError:
             self.logger.error(f"Transcription not found: history_id={history_id}, id={transcription.id}")
@@ -291,6 +274,69 @@ class HistoryStorage:
         except Exception as e:
             self.logger.error(f"Failed to update transcription: {str(e)}")
             return False
+    
+    def _update_transcription_with_retry(self, history_id: str, transcription: Transcription, max_retries: int = 3) -> bool:
+        """Update transcription with optimistic concurrency and retry pattern."""
+        import time
+        from azure.core.exceptions import ResourceExistsError, HttpResponseError
+        
+        table_client = self.table_service.get_table_client(self.table_name)
+        
+        for attempt in range(max_retries):
+            try:
+                self.logger.info(f"UPDATE_RETRY: Attempt {attempt + 1}/{max_retries} for transcription {transcription.id}")
+                
+                # Fresh entity lookup with current ETag
+                entity = table_client.get_entity(
+                    partition_key=history_id,
+                    row_key=transcription.id
+                )
+                
+                self.logger.info(f"UPDATE_RETRY: Retrieved entity with ETag={entity.metadata.get('etag', 'None')}")
+                
+                # Update entity fields with fresh data
+                entity["status"] = transcription.status
+                entity["transcript_chunks"] = json.dumps([{
+                    "event_type": chunk.event_type,
+                    "session": chunk.session,
+                    "offset": chunk.offset,
+                    "duration": chunk.duration,
+                    "text": chunk.text,
+                    "speaker_id": chunk.speaker_id,
+                    "result_id": chunk.result_id,
+                    "filename": chunk.filename,
+                    "language": chunk.language
+                } for chunk in transcription.transcript_chunks])
+                entity["timestamp"] = transcription.timestamp.isoformat() if transcription.timestamp else None
+                
+                # Update with current ETag (optimistic concurrency)
+                table_client.update_entity(entity, mode="replace")
+                
+                self.logger.info(f"UPDATE_RETRY: SUCCESS on attempt {attempt + 1} - Updated transcription {transcription.id}")
+                return True
+                
+            except HttpResponseError as e:
+                if e.status_code == 412:  # Precondition Failed - ETag mismatch
+                    self.logger.warning(f"UPDATE_RETRY: ETag conflict on attempt {attempt + 1}, retrying...")
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 0.1s, 0.2s, 0.4s
+                        sleep_time = 0.1 * (2 ** attempt)
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        self.logger.error(f"UPDATE_RETRY: Max retries exceeded due to ETag conflicts")
+                        return False
+                else:
+                    self.logger.error(f"UPDATE_RETRY: HTTP error {e.status_code}: {str(e)}")
+                    return False
+            except Exception as e:
+                self.logger.error(f"UPDATE_RETRY: Unexpected error on attempt {attempt + 1}: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(0.1 * (2 ** attempt))
+                    continue
+                return False
+        
+        return False
     
 
     def get_history_by_id(self, history_id: str) -> Optional[History]:
@@ -513,10 +559,13 @@ class HistoryStorage:
             
             # Query by partition key and entity type
             filter_query = f"PartitionKey eq '{history_id}' and entity_type eq 'transcription'"
+            self.logger.info(f"Querying transcriptions: {filter_query}")
             entities = list(table_client.query_entities(filter_query))
+            self.logger.info(f"Found {len(entities)} transcription entities for history {history_id}")
             
             transcriptions = []
             for entity in entities:
+                self.logger.debug(f"Processing transcription entity: RowKey={entity.get('RowKey')}, status={entity.get('status')}")
                 # Parse transcript chunks from JSON
                 transcript_chunks = []
                 if entity.get("transcript_chunks"):

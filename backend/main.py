@@ -438,6 +438,7 @@ async def submit_transcription(
             # Add transcription to history
             add_transcription_to_history(history_record.id, transcription_record)
             logger.info(f"Added transcription to history record: {history_record.id}")
+            logger.info(f"DEBUG: transcription_record.id after add_transcription_to_history = {transcription_record.id}")
 
         def event_stream():
             import queue
@@ -445,7 +446,12 @@ async def submit_transcription(
 
             def callback(event_dict):
                 # Update transcription record status and content if available
+                logger.info(f"CALLBACK: Received event: {event_dict.get('event_type')} with text length: {len(event_dict.get('text', ''))}")
+                
                 if transcription_record:
+                    logger.info(f"CALLBACK: transcription_record.id = {transcription_record.id}")
+                    should_update_storage = False
+                    
                     if event_dict.get("event_type") == "transcribed":
                         # Create a transcript chunk from the event data
                         chunk = Transcript_chunk(
@@ -461,6 +467,8 @@ async def submit_transcription(
                         )
                         transcription_record.transcript_chunks.append(chunk)
                         logger.info(f"Added transcript chunk with {len(event_dict.get('text', ''))} characters")
+                        should_update_storage = True
+                        
                     elif event_dict.get("event_type") == "transcript":
                         # Handle legacy transcript events that might contain full text
                         # Create a single chunk for backward compatibility
@@ -473,13 +481,29 @@ async def submit_transcription(
                         transcription_record.transcript_chunks.append(chunk)
                         transcription_record.status = "completed"
                         logger.info("Updated transcription record with legacy transcript text")
+                        should_update_storage = True
+                        
                     elif event_dict.get("event_type") in ("closing", "session_stopped"):
                         if transcription_record.status == "pending":
                             transcription_record.status = "completed"
                         logger.info(f"Final transcription status: {transcription_record.status}")
+                        should_update_storage = True
+                        
                     elif event_dict.get("event_type") == "error":
                         transcription_record.status = "failed"
                         logger.error("Transcription failed, updated status")
+                        should_update_storage = True
+                    
+                    # Update storage immediately when transcription data changes
+                    if should_update_storage and history_record and transcription_record.id:
+                        try:
+                            update_success = update_transcription_in_history(history_record.id, transcription_record)
+                            if update_success:
+                                logger.info(f"Updated transcription {transcription_record.id} in storage during processing")
+                            else:
+                                logger.warning(f"Failed to update transcription {transcription_record.id} during processing")
+                        except Exception as e:
+                            logger.error(f"Error updating transcription during processing: {str(e)}")
                 
                 # logger.info(f"callback: Received event: {event_dict}")
                 q.put(event_dict)
@@ -520,13 +544,8 @@ async def submit_transcription(
                     break
             t.join()
             
-            # Update transcription in history after completion
-            if history_record and transcription_record:
-                success = update_transcription_in_history(history_record.id, transcription_record)
-                if success:
-                    logger.info(f"Updated transcription in history record: {history_record.id}")
-                else:
-                    logger.error(f"Failed to update transcription in history record: {history_record.id}")
+            # Transcription updates happen during callback processing
+            logger.info(f"Transcription processing completed for history: {history_record.id if history_record else 'None'}")
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1466,3 +1485,137 @@ async def test_live_endpoint():
         "has_sessions_attr": hasattr(app.state, 'live_sessions'),
         "timestamp": time.time()
     }
+
+@app.post("/debug/test-concurrency")
+async def test_concurrency_fix():
+    """Test ETag concurrency fix pro Azure Tables multiple updates."""
+    logger = logging.getLogger("test_concurrency_fix")
+    
+    try:
+        storage = get_history_storage()
+        
+        if not storage.use_azure_tables:
+            return {
+                "test_result": "skipped",
+                "reason": "In-memory mode - can't test Azure Tables concurrency",
+                "storage_mode": "in_memory"
+            }
+        
+        # Create test data
+        test_user_id = f"test_user_{int(time.time())}"
+        test_session_id = f"session_{str(uuid.uuid4())[:8]}"
+        
+        logger.info(f"Creating test history for concurrency test: {test_user_id}")
+        history_record = add_history_record(test_user_id, test_session_id, "concurrency_test")
+        
+        # Create transcription with initial data
+        transcription = Transcription(
+            file_name="test_concurrent.wav",
+            file_name_original="test_concurrent.wav",
+            language="cs",
+            model="msft",
+            temperature=0.0,
+            diarization="true",
+            combine="false",
+            status="processing",
+            transcript_chunks=[]
+        )
+        
+        # Add to history
+        logger.info("Adding transcription to history...")
+        add_success = add_transcription_to_history(history_record.id, transcription)
+        
+        if not add_success or not transcription.id:
+            return {
+                "test_result": "failed",
+                "error": "Failed to add initial transcription",
+                "stage": "setup"
+            }
+        
+        # Perform multiple rapid updates (simulating the bug scenario)
+        logger.info("Starting multiple rapid updates test...")
+        update_results = []
+        
+        # Update 1: Add first chunk
+        transcription.transcript_chunks.append(
+            Transcript_chunk(
+                event_type="transcribed",
+                session=test_session_id,
+                offset=0,
+                duration=2000,
+                text="První část testovacího přepisu.",
+                speaker_id="Speaker_1",
+                result_id="result_001",
+                filename="test_concurrent.wav",
+                language="cs"
+            )
+        )
+        transcription.status = "in_progress"
+        
+        result1 = update_transcription_in_history(history_record.id, transcription)
+        update_results.append({"update": "first_chunk", "success": result1})
+        logger.info(f"Update 1 result: {result1}")
+        
+        # Update 2: Add second chunk (this would fail before fix)
+        transcription.transcript_chunks.append(
+            Transcript_chunk(
+                event_type="transcribed",
+                session=test_session_id,
+                offset=2000,
+                duration=2000,
+                text="Druhá část s jiným mluvčím.",
+                speaker_id="Speaker_2",
+                result_id="result_002",
+                filename="test_concurrent.wav",
+                language="cs"
+            )
+        )
+        
+        result2 = update_transcription_in_history(history_record.id, transcription)
+        update_results.append({"update": "second_chunk", "success": result2})
+        logger.info(f"Update 2 result: {result2}")
+        
+        # Update 3: Complete transcription
+        transcription.status = "completed"
+        transcription.analysis = "Test analysis result"
+        
+        result3 = update_transcription_in_history(history_record.id, transcription)
+        update_results.append({"update": "completion", "success": result3})
+        logger.info(f"Update 3 result: {result3}")
+        
+        # Verify final state
+        retrieved = get_history_by_id(history_record.id)
+        final_verification = {
+            "history_found": retrieved is not None,
+            "transcriptions_count": len(retrieved.transcriptions) if retrieved else 0,
+            "final_status": retrieved.transcriptions[0].status if retrieved and retrieved.transcriptions else None,
+            "final_chunks_count": len(retrieved.transcriptions[0].transcript_chunks) if retrieved and retrieved.transcriptions else 0
+        }
+        
+        # Calculate overall success
+        all_updates_successful = all(result["success"] for result in update_results)
+        
+        return {
+            "test_result": "success" if all_updates_successful else "failed",
+            "storage_mode": "azure_tables",
+            "test_scenario": "Multiple rapid updates on same transcription",
+            "created_history_id": history_record.id,
+            "transcription_id": transcription.id,
+            "update_results": update_results,
+            "final_verification": final_verification,
+            "summary": {
+                "total_updates": len(update_results),
+                "successful_updates": sum(1 for r in update_results if r["success"]),
+                "all_successful": all_updates_successful,
+                "fix_working": all_updates_successful and final_verification["final_chunks_count"] == 2
+            },
+            "message": "ETag concurrency fix working!" if all_updates_successful else "Some updates failed - check logs"
+        }
+        
+    except Exception as e:
+        logger.error(f"Concurrency test failed: {str(e)}")
+        return {
+            "test_result": "error",
+            "error": str(e),
+            "message": "Test failed with exception"
+        }
